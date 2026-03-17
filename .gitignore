@@ -1,0 +1,29 @@
+# dependencies
+node_modules
+
+# env files
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+
+# build outputs
+dist
+build
+.out
+coverage
+
+# bun
+.bun
+bun.lock
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode
+.idea
+*.iml
