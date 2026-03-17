@@ -1,15 +1,21 @@
-import "dotenv/config";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 
-const connectionString = process.env.DATABASE_URL;
+const {
+  DATABASE_URL,
+  DB_USER,
+  DB_PASSWORD,
+  DB_NAME,
+  CLOUD_SQL_CONNECTION_NAME,
+} = process.env;
 
-if (!connectionString) {
-  throw new Error("DATABASE_URL is missing");
-}
-
-const pool = new Pool({
-  connectionString,
-});
+export const pool = DATABASE_URL
+  ? new Pool({ connectionString: DATABASE_URL })
+  : new Pool({
+      user: DB_USER,
+      password: DB_PASSWORD,
+      database: DB_NAME,
+      host: `/cloudsql/${CLOUD_SQL_CONNECTION_NAME}`,
+    });
 
 export const db = drizzle(pool);
