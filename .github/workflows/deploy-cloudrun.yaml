@@ -51,4 +51,6 @@ jobs:
           region: ${{ env.REGION }}
 
       - name: Health check
-        run: 'curl "${{ steps.deploy.outputs.url }}/health"'
+        run: |
+          URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} --region ${{ env.REGION }} --format='value(status.url)')
+          curl -f "$URL/health"
