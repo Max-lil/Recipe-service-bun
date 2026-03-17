@@ -17,7 +17,6 @@ coverage
 
 # bun
 .bun
-bun.lock
 
 # OS
 .DS_Store
