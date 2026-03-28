@@ -5,6 +5,7 @@ import recipeRouter from "./features/recipe/recipe-router";
 import userRouter from "./features/user/user-router";
 import planningRouter from "./features/planning/planning-router";
 import ingredientRouter from "./features/ingredient/ingredient-router";
+import shoppinglistRouter from "./features/shoppinglist/shoppinglist-router";
 
 const app = new Hono();
 
@@ -26,6 +27,7 @@ app.route("/recipes", recipeRouter);
 app.route("/users", userRouter);
 app.route("/planning", planningRouter);
 app.route("/ingredients", ingredientRouter);
+app.route("/shoppinglist", shoppinglistRouter);
 
 const port = Number(process.env.PORT ?? 8080);
 

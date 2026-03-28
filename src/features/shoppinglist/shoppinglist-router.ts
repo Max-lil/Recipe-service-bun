@@ -1,7 +1,9 @@
-import { app } from "../ingredient/ingredient-router";
+import { Hono } from "hono";
 import * as service from "./shoppinglist-service";
 
-app.get("/shoppinglist/:weekPlanId", async (c) => {
+export const app = new Hono();
+
+app.get("/:weekPlanId", async (c) => {
   const weekPlanId = c.req.param("weekPlanId");
   const response = await service.getShoppinglistByWeekPlanId(
     Number(weekPlanId),
@@ -9,3 +11,5 @@ app.get("/shoppinglist/:weekPlanId", async (c) => {
 
   return c.json(response);
 });
+
+export default app;
