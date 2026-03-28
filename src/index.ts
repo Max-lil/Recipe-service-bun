@@ -1,11 +1,22 @@
 import { Hono } from "hono";
 import { testRoutes } from "./routes/test";
+import { cors } from "hono/cors";
 import recipeRouter from "./features/recipe/recipe-router";
 import userRouter from "./features/user/user-router";
 import planningRouter from "./features/planning/planning-router";
 import ingredientRouter from "./features/ingredient/ingredient-router";
 
 const app = new Hono();
+
+app.use(
+  "*",
+  cors({
+    origin: [
+      "http://localhost:5173",
+      "https://recipes-client-360907376023.europe-north2.run.app",
+    ],
+  }),
+);
 
 app.get("/", (c) => c.json({ message: "API is running" }));
 app.get("/health", (c) => c.text("ok"));
