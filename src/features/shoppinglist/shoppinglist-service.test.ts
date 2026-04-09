@@ -57,6 +57,38 @@ describe("shopping list sync", () => {
     ]);
   });
 
+  test("returns ingredients in alphabetical order", () => {
+    const result = buildShoppingListItemsForWeekPlan(9, [
+      { name: "Sugar", quantity: 3, unit: "msk" },
+      { name: "apple", quantity: 2, unit: "pcs" },
+      { name: "Butter", quantity: 50, unit: "g" },
+    ]);
+
+    expect(result).toEqual([
+      {
+        checked: false,
+        name: "apple",
+        quantity: 2,
+        unit: "pcs",
+        weekPlanId: 9,
+      },
+      {
+        checked: false,
+        name: "Butter",
+        quantity: 50,
+        unit: "g",
+        weekPlanId: 9,
+      },
+      {
+        checked: false,
+        name: "Sugar",
+        quantity: 3,
+        unit: "msk",
+        weekPlanId: 9,
+      },
+    ]);
+  });
+
   test("rebuilt rows reflect recipe replacement", () => {
     const beforeReplacement = buildShoppingListItemsForWeekPlan(3, [
       { name: "Milk", quantity: 2, unit: "dl" },

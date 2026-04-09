@@ -35,6 +35,12 @@ type ShoppingListResponseRow = Omit<
 
 const normalizeGroupingValue = (value: string) => value.trim().toLowerCase();
 
+const compareIngredientNames = (leftName: string, rightName: string) => {
+  return leftName.localeCompare(rightName, undefined, {
+    sensitivity: "base",
+  });
+};
+
 export const buildShoppingListItemsForWeekPlan = (
   weekPlanId: number,
   ingredientRows: WeekPlanIngredientRow[],
@@ -72,6 +78,10 @@ export const buildShoppingListItemsForWeekPlan = (
     });
   });
 
+  shoppingListItems.sort((leftItem, rightItem) =>
+    compareIngredientNames(leftItem.name, rightItem.name),
+  );
+
   return shoppingListItems;
 };
 
@@ -83,13 +93,19 @@ export const getShoppingListByWeekPlanId = async (
     .from(shoppingListItem)
     .where(eq(shoppingListItem.weekPlanId, weekPlanId));
 
-  return shoppingListRows.map((shoppingListRow) => {
+  const shoppingList = shoppingListRows.map((shoppingListRow) => {
     return {
       ...shoppingListRow,
       quantity:
         shoppingListRow.quantity === 0 ? null : shoppingListRow.quantity,
     };
   });
+
+  shoppingList.sort((leftItem, rightItem) =>
+    compareIngredientNames(leftItem.name, rightItem.name),
+  );
+
+  return shoppingList;
 };
 
 export const syncShoppingListForWeekPlan = async (
