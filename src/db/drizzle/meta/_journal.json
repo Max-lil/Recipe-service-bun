@@ -15,6 +15,13 @@
       "when": 1775669800649,
       "tag": "0001_jazzy_black_knight",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1775734335791,
+      "tag": "0002_material_doctor_faustus",
+      "breakpoints": true
     }
   ]
 }
