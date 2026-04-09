@@ -1,44 +1,73 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "../../db/drizzle";
 import { dayPlan, recipes, weekPlan } from "../../db/drizzle/schema";
+import { syncShoppingListForWeekPlan } from "../shoppinglist/shoppinglist-service";
 import {
-  ApiWeekPlanInsertSchema,
   ApiWeekPlanRequestSchema,
   ApiWeekPlanResponseSchema,
+  ApiWeekPlanSaveSchema,
 } from "./weekPlan-model";
-import { ApiDayPlanInsertSchema } from "./dayPlan-model";
-import { addDays, format } from "date-fns";
 
-export const getWeekPlanByStartDate = async (
-  data: ApiWeekPlanInsertSchema,
-): Promise<ApiWeekPlanResponseSchema | null> => {
-  let weekPlanBody;
-  const existingPlan = await db
-    .select()
+type StoredWeekPlan = {
+  id: number;
+  userId: number;
+  weekStartDate: string;
+  status: string | null;
+};
+
+type StoredWeekPlanDayRow = {
+  id: number;
+  plannedDate: string;
+  recipeId: number | null;
+  recipeTitle: string | null;
+  recipeUrl: string | null;
+};
+
+const mapWeekPlanResponse = (
+  storedWeekPlan: StoredWeekPlan,
+  dayRows: StoredWeekPlanDayRow[],
+): ApiWeekPlanResponseSchema => ({
+  id: storedWeekPlan.id,
+  weekStartDate: storedWeekPlan.weekStartDate,
+  status: storedWeekPlan.status,
+  days: dayRows.map((dayRow) => ({
+    id: dayRow.id,
+    plannedDate: dayRow.plannedDate,
+    recipe:
+      dayRow.recipeId === null
+        ? null
+        : {
+            id: dayRow.recipeId,
+            title: dayRow.recipeTitle!,
+            url: dayRow.recipeUrl,
+          },
+  })),
+});
+
+const getWeekPlanBody = async (
+  database: typeof db,
+  data: ApiWeekPlanRequestSchema,
+) => {
+  const weekPlans = await database
+    .select({
+      id: weekPlan.id,
+      userId: weekPlan.userId,
+      weekStartDate: weekPlan.weekStartDate,
+      status: weekPlan.status,
+    })
     .from(weekPlan)
     .where(
       and(
-        eq(weekPlan.weekStartDate, data.weekStartDate),
         eq(weekPlan.userId, data.userId),
+        eq(weekPlan.weekStartDate, data.weekStartDate),
       ),
     );
-  weekPlanBody = existingPlan[0];
 
-  if (!weekPlanBody) {
-    const { weekPlanData, dayPlansData } = buildWeekPlanWithDays(data);
-    const [newWeekPlan] = await db
-      .insert(weekPlan)
-      .values(weekPlanData)
-      .returning();
-    await db
-      .insert(dayPlan)
-      .values(
-        dayPlansData.map((dp) => ({ ...dp, weekPlanId: newWeekPlan.id })),
-      );
-    weekPlanBody = newWeekPlan;
-  }
+  return weekPlans[0] ?? null;
+};
 
-  const dayRows = await db
+const getWeekPlanDayRows = async (database: typeof db, weekPlanId: number) => {
+  return database
     .select({
       id: dayPlan.id,
       plannedDate: dayPlan.plannedDate,
@@ -48,37 +77,74 @@ export const getWeekPlanByStartDate = async (
     })
     .from(dayPlan)
     .leftJoin(recipes, eq(dayPlan.recipeId, recipes.id))
-    .where(eq(dayPlan.weekPlanId, weekPlanBody.id))
+    .where(eq(dayPlan.weekPlanId, weekPlanId))
     .orderBy(asc(dayPlan.plannedDate));
-
-  return {
-    id: weekPlanBody.id,
-    weekStartDate: weekPlanBody.weekStartDate,
-    status: weekPlanBody.status,
-    days: dayRows.map((dayRow) => ({
-      id: dayRow.id,
-      plannedDate: dayRow.plannedDate,
-      recipe:
-        dayRow.recipeId === null
-          ? null
-          : {
-              id: dayRow.recipeId,
-              title: dayRow.recipeTitle!,
-              url: dayRow.recipeUrl!,
-            },
-    })),
-  };
 };
 
-const buildWeekPlanWithDays = (data: ApiWeekPlanInsertSchema) => {
-  const weekPlanData = {
-    userId: data.userId,
-    weekStartDate: data.weekStartDate,
-    status: "PLANNED" as const,
-  };
-  const dayPlansData = Array.from({ length: 7 }, (_, i) => ({
-    plannedDate: format(addDays(data.weekStartDate, i), "yyyy-MM-dd"),
-    recipeId: null,
-  }));
-  return { weekPlanData, dayPlansData };
+const createWeekPlanBody = async (
+  database: typeof db,
+  data: ApiWeekPlanRequestSchema,
+) => {
+  const [weekPlanBody] = await database
+    .insert(weekPlan)
+    .values({
+      userId: data.userId,
+      weekStartDate: data.weekStartDate,
+      status: "PLANNED",
+    })
+    .returning({
+      id: weekPlan.id,
+      userId: weekPlan.userId,
+      weekStartDate: weekPlan.weekStartDate,
+      status: weekPlan.status,
+    });
+
+  return weekPlanBody;
+};
+
+export const getSavedWeekPlan = async (
+  data: ApiWeekPlanRequestSchema,
+): Promise<ApiWeekPlanResponseSchema | null> => {
+  const weekPlanBody = await getWeekPlanBody(db, data);
+
+  if (!weekPlanBody) {
+    return null;
+  }
+
+  const dayRows = await getWeekPlanDayRows(db, weekPlanBody.id);
+  return mapWeekPlanResponse(weekPlanBody, dayRows);
+};
+
+export const saveWeekPlan = async (
+  data: ApiWeekPlanSaveSchema,
+): Promise<ApiWeekPlanResponseSchema> => {
+  return db.transaction(async (tx) => {
+    const transactionDb = tx as unknown as typeof db;
+    let weekPlanBody = await getWeekPlanBody(transactionDb, data);
+
+    if (!weekPlanBody) {
+      weekPlanBody = await createWeekPlanBody(transactionDb, data);
+    }
+
+    await transactionDb
+      .insert(dayPlan)
+      .values(
+        data.days.map((day) => ({
+          weekPlanId: weekPlanBody.id,
+          plannedDate: day.plannedDate,
+          recipeId: day.recipeId,
+        })),
+      )
+      .onConflictDoUpdate({
+        target: [dayPlan.weekPlanId, dayPlan.plannedDate],
+        set: {
+          recipeId: sql`excluded.recipe_id`,
+        },
+      });
+
+    await syncShoppingListForWeekPlan(weekPlanBody.id, transactionDb);
+
+    const dayRows = await getWeekPlanDayRows(transactionDb, weekPlanBody.id);
+    return mapWeekPlanResponse(weekPlanBody, dayRows);
+  });
 };

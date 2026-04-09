@@ -33,7 +33,7 @@ export const recipes = pgTable("recipes", {
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	id: bigint({ mode: "number" }).primaryKey().generatedByDefaultAsIdentity({ name: "recipes_id_seq", startWith: 1, increment: 1, minValue: 1, maxValue: 9223372036854775807, cache: 1 }),
 	title: varchar({ length: 255 }).notNull(),
-	url: varchar({ length: 255 }).notNull(),
+	url: varchar({ length: 255 }),
 	ingredientsRaw: text("ingredients_raw"),
 });
 

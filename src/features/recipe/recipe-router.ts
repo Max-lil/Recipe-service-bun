@@ -40,6 +40,26 @@ app.post(
 );
 
 app.post(
+  "/",
+  zValidator("json", recipeCreateSchema, (result, c) => {
+    if (!result.success) {
+      return c.json(
+        {
+          message: "Invalid request body",
+          errors: result.error,
+        },
+        400,
+      );
+    }
+  }),
+  async (c) => {
+    const payload = c.req.valid("json");
+    const recipe = await service.createRecipe(payload);
+    return c.json(recipe, 201);
+  },
+);
+
+app.post(
   "/add",
   zValidator("json", recipeCreateSchema, (result, c) => {
     if (!result.success) {

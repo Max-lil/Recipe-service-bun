@@ -1,6 +1,6 @@
 import { db } from "../../db/drizzle";
 import { and, asc, eq } from "drizzle-orm";
-import { ingredient, shoppingListItem } from "../../db/drizzle/schema";
+import { ingredient } from "../../db/drizzle/schema";
 import { ApiIngredientSelectSchema } from "./ingredient-model";
 
 export const getAllIngredientsByRecipeId = async (id: number) => {

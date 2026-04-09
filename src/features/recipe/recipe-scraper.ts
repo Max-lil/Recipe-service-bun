@@ -25,7 +25,7 @@ const KNOWN_UNITS = new Set([
   "teskedar",
   "matsked",
   "matskedar",
-  "kryddm\u00e5tt",
+  "kryddmått",
   "styck",
   "stck",
   "stycken",
@@ -43,15 +43,15 @@ const UNICODE_FRACTIONS = new Map([
   ["3/8", 0.375],
   ["5/8", 0.625],
   ["7/8", 0.875],
-  ["\u00bd", 0.5],
-  ["\u2153", 1 / 3],
-  ["\u2154", 2 / 3],
-  ["\u00bc", 0.25],
-  ["\u00be", 0.75],
-  ["\u215b", 0.125],
-  ["\u215c", 0.375],
-  ["\u215d", 0.625],
-  ["\u215e", 0.875],
+  ["½", 0.5],
+  ["⅓", 1 / 3],
+  ["⅔", 2 / 3],
+  ["¼", 0.25],
+  ["¾", 0.75],
+  ["⅛", 0.125],
+  ["⅜", 0.375],
+  ["⅝", 0.625],
+  ["⅞", 0.875],
 ]);
 
 const DOM_INGREDIENT_SELECTORS = [
@@ -94,6 +94,16 @@ type QuantityParseResult = {
   tokensConsumed: number;
 };
 
+type IngredientLineStructure = {
+  quantity: number | null;
+  unit: string;
+  nameStartIndex: number;
+};
+
+type NormalizeIngredientLineOptions = {
+  domLines?: string[];
+};
+
 export const scrapeRecipeFromUrl = async (
   url: string,
   fetchImpl: typeof fetch = fetch,
@@ -134,11 +144,14 @@ export const fetchRecipeHtml = async (
 
 export const extractScrapedRecipeFromHtml = (html: string): ScrapedRecipe => {
   const jsonLdRecipe = extractRecipeFromJsonLd(html);
+  const domIngredientLines = extractRecipeFromDom(html);
   const ingredientLines =
     jsonLdRecipe.ingredients.length > 0
       ? jsonLdRecipe.ingredients
-      : extractRecipeFromDom(html);
-  const normalizedLines = normalizeIngredientLines(ingredientLines);
+      : domIngredientLines;
+  const normalizedLines = normalizeIngredientLines(ingredientLines, {
+    domLines: jsonLdRecipe.ingredients.length > 0 ? domIngredientLines : undefined,
+  });
 
   if (normalizedLines.length === 0) {
     throw new RecipeScrapeError(
@@ -220,15 +233,35 @@ export const extractRecipeFromDom = (html: string) => {
   return Array.from(ingredients);
 };
 
-export const normalizeIngredientLines = (lines: string[]) => {
+export const normalizeIngredientLines = (
+  lines: string[],
+  options: NormalizeIngredientLineOptions = {},
+) => {
+  const cleanedLines = lines
+    .map((line) => cleanIngredientLine(line))
+    .filter((line) => Boolean(line));
   const normalizedLines = new Set<string>();
+  const cleanedDomLines = (options.domLines ?? [])
+    .map((line) => cleanIngredientLine(line))
+    .filter((line) => Boolean(line));
+  const domLineSet = new Set(cleanedDomLines);
+  const domOverlapCount = cleanedLines.filter((line) => domLineSet.has(line)).length;
+  const hasReliableDomSignal =
+    cleanedDomLines.length > 0 && domOverlapCount / cleanedDomLines.length >= 0.5;
 
-  for (const line of lines) {
-    const cleanedLine = cleanIngredientLine(line);
-    if (cleanedLine) {
+  cleanedLines.forEach((cleanedLine, index) => {
+    if (
+      !isIngredientSectionHeader(
+        cleanedLine,
+        cleanedLines,
+        index,
+        domLineSet,
+        hasReliableDomSignal,
+      )
+    ) {
       normalizedLines.add(cleanedLine);
     }
-  }
+  });
 
   return Array.from(normalizedLines);
 };
@@ -245,27 +278,13 @@ export const parseIngredientLine = (line: string): ScrapedIngredient => {
   }
 
   const tokens = cleanedLine.split(/\s+/);
-  const quantityResult = parseLeadingQuantity(tokens);
-  let quantity: number | null = null;
-  let index = 0;
-
-  if (quantityResult) {
-    quantity = quantityResult.quantity;
-    index = quantityResult.tokensConsumed;
-  }
-
-  let unit = "";
-  if (quantity !== null && index < tokens.length && isKnownUnit(tokens[index])) {
-    unit = normalizeUnit(tokens[index]);
-    index += 1;
-  }
-
-  const name = joinTokens(tokens, index) || cleanedLine;
+  const structure = parseIngredientStructure(tokens);
+  const name = joinTokens(tokens, structure.nameStartIndex) || cleanedLine;
 
   return {
     name,
-    quantity,
-    unit,
+    quantity: structure.quantity,
+    unit: structure.unit,
     rawText: cleanedLine,
   };
 };
@@ -339,8 +358,117 @@ const cleanIngredientLine = (line: string) => {
   return normalizeWhitespace(line).replace(/^[\-\*\u2022\s]+/, "").trim();
 };
 
+const isIngredientSectionHeader = (
+  line: string,
+  cleanedLines: string[],
+  index: number,
+  domLineSet: Set<string>,
+  hasReliableDomSignal: boolean,
+) => {
+  const candidate = stripTrailingHeaderPunctuation(line);
+  if (!candidate || /\d/.test(candidate) || /[(),]/.test(candidate)) {
+    return false;
+  }
+
+  const tokens = candidate.split(/\s+/);
+  if (tokens.length === 0 || tokens.length > 4) {
+    return false;
+  }
+
+  const structure = parseIngredientStructure(tokens);
+  if (structure.quantity !== null || structure.unit) {
+    return false;
+  }
+
+  const nextIngredientLikeLines = cleanedLines
+    .slice(index + 1, index + 4)
+    .filter((nextLine) => looksLikeIngredientContent(nextLine));
+
+  if (nextIngredientLikeLines.length === 0) {
+    return false;
+  }
+
+  if (domLineSet.has(line)) {
+    return false;
+  }
+
+  if (line.endsWith(":")) {
+    return startsWithUppercase(candidate);
+  }
+
+  if (
+    tokens.length === 1 &&
+    startsWithUppercase(candidate) &&
+    nextIngredientLikeLines.length >= 2
+  ) {
+    return true;
+  }
+
+  return (
+    (hasReliableDomSignal || tokens.length > 1) &&
+    nextIngredientLikeLines.length >= 2 &&
+    looksLikeSectionLabel(candidate)
+  );
+};
+
+const stripTrailingHeaderPunctuation = (line: string) =>
+  line.replace(/:+$/, "").trim();
+
+const looksLikeIngredientContent = (line: string) => {
+  const cleanedLine = cleanIngredientLine(line);
+  if (!cleanedLine) {
+    return false;
+  }
+
+  const tokens = cleanedLine.split(/\s+/);
+  const structure = parseIngredientStructure(tokens);
+
+  return (
+    structure.quantity !== null ||
+    structure.unit.length > 0 ||
+    startsWithLowercase(cleanedLine) ||
+    /[(),]/.test(cleanedLine)
+  );
+};
+
+const looksLikeSectionLabel = (line: string) => {
+  const tokens = line.split(/\s+/);
+  if (!startsWithUppercase(tokens[0] ?? "")) {
+    return false;
+  }
+
+  return tokens
+    .slice(1)
+    .every((token) => startsWithUppercase(token) || startsWithLowercase(token));
+};
+
 const normalizeWhitespace = (value: string | null | undefined) => {
   return value?.trim().replace(/\s+/g, " ") ?? "";
+};
+
+const parseIngredientStructure = (
+  tokens: string[],
+): IngredientLineStructure => {
+  const quantityResult = parseLeadingQuantity(tokens);
+  let quantity: number | null = null;
+  let index = 0;
+
+  if (quantityResult) {
+    quantity = quantityResult.quantity;
+    index = quantityResult.tokensConsumed;
+  }
+
+  let unit = "";
+  if (quantity !== null && index < tokens.length && isKnownUnit(tokens[index])) {
+    unit = normalizeUnit(tokens[index]);
+    index += 1;
+  }
+
+  return {
+    quantity,
+    unit,
+    nameStartIndex: index,
+  };
 };
 
 const parseLeadingQuantity = (tokens: string[]): QuantityParseResult | null => {
@@ -412,6 +540,30 @@ const isFractionToken = (token: string) => {
 };
 
 const isKnownUnit = (token: string) => KNOWN_UNITS.has(normalizeUnit(token));
+
+const startsWithUppercase = (value: string) => {
+  const firstCharacter = Array.from(value.trim())[0];
+  if (!firstCharacter) {
+    return false;
+  }
+
+  return (
+    firstCharacter === firstCharacter.toLocaleUpperCase("sv-SE") &&
+    firstCharacter !== firstCharacter.toLocaleLowerCase("sv-SE")
+  );
+};
+
+const startsWithLowercase = (value: string) => {
+  const firstCharacter = Array.from(value.trim())[0];
+  if (!firstCharacter) {
+    return false;
+  }
+
+  return (
+    firstCharacter === firstCharacter.toLocaleLowerCase("sv-SE") &&
+    firstCharacter !== firstCharacter.toLocaleUpperCase("sv-SE")
+  );
+};
 
 const normalizeUnit = (token: string) => {
   return token

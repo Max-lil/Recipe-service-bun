@@ -1,24 +1,50 @@
 import { eq } from "drizzle-orm";
 import { db } from "../../db/drizzle/index";
-import { ingredient, recipes } from "../../db/drizzle/schema";
+import { dayPlan, ingredient, recipes } from "../../db/drizzle/schema";
 import type {
-  ApiRecipeInsertSchema,
+  ApiRecipeCreateSchema,
   ApiRecipeScrapeRequestSchema,
   ApiRecipeScrapeResponseSchema,
   ApiRecipeSelectSchema,
 } from "./recipe-model";
 import { scrapeRecipeFromUrl } from "./recipe-scraper";
+import { syncShoppingListForWeekPlan } from "../shoppinglist/shoppinglist-service";
 
 export const getAllRecipes = async (): Promise<ApiRecipeSelectSchema[]> => {
   return db.select().from(recipes);
 };
 
-export const createRecipe = async (data: ApiRecipeInsertSchema) => {
+export const createRecipe = async (data: ApiRecipeCreateSchema) => {
   const [recipeBody] = await db
     .insert(recipes)
     .values({ title: data.title, url: data.url })
-    .returning();
+    .returning({
+      id: recipes.id,
+      title: recipes.title,
+      url: recipes.url,
+      ingredientsRaw: recipes.ingredientsRaw,
+    });
   return recipeBody;
+};
+
+const syncShoppingListsForRecipe = async (
+  recipeId: number,
+  database: typeof db,
+) => {
+  const weekPlanRows = await database
+    .select({
+      weekPlanId: dayPlan.weekPlanId,
+    })
+    .from(dayPlan)
+    .where(eq(dayPlan.recipeId, recipeId));
+
+  const weekPlanIds = Array.from(
+    new Set(weekPlanRows.map((row) => row.weekPlanId)),
+  );
+
+  for (const weekPlanId of weekPlanIds) {
+    await syncShoppingListForWeekPlan(weekPlanId, database);
+  }
 };
 
 export const scrapeAndSaveRecipe = async (
@@ -30,27 +56,55 @@ export const scrapeAndSaveRecipe = async (
     .from(recipes)
     .where(eq(recipes.url, normalizedUrl));
 
-  if (existingRecipe[0]) {
-    const existingIngredients = await db
-      .select()
-      .from(ingredient)
-      .where(eq(ingredient.recipeId, existingRecipe[0].id));
-
-    return {
-      recipe: {
-        id: existingRecipe[0].id,
-        title: existingRecipe[0].title,
-        url: existingRecipe[0].url,
-        ingredientsRaw: existingRecipe[0].ingredientsRaw,
-      },
-      ingredients: existingIngredients,
-    };
-  }
-
   const scrapedRecipe = await scrapeRecipeFromUrl(normalizedUrl);
-  const recipeTitle = data.title?.trim() || scrapedRecipe.title || "Unknown recipe";
+  const recipeTitle =
+    data.title?.trim() ||
+    scrapedRecipe.title ||
+    existingRecipe[0]?.title ||
+    "Unknown recipe";
 
   return db.transaction(async (tx) => {
+    if (existingRecipe[0]) {
+      const [updatedRecipe] = await tx
+        .update(recipes)
+        .set({
+          title: recipeTitle,
+          ingredientsRaw: scrapedRecipe.ingredientsRaw,
+        })
+        .where(eq(recipes.id, existingRecipe[0].id))
+        .returning();
+
+      await tx.delete(ingredient).where(eq(ingredient.recipeId, existingRecipe[0].id));
+
+      const updatedIngredients = await tx
+        .insert(ingredient)
+        .values(
+          scrapedRecipe.ingredients.map((scrapedIngredient) => ({
+            recipeId: updatedRecipe.id,
+            name: scrapedIngredient.name,
+            quantity: scrapedIngredient.quantity,
+            unit: scrapedIngredient.unit,
+            rawText: scrapedIngredient.rawText,
+          })),
+        )
+        .returning();
+
+      await syncShoppingListsForRecipe(
+        updatedRecipe.id,
+        tx as unknown as typeof db,
+      );
+
+      return {
+        recipe: {
+          id: updatedRecipe.id,
+          title: updatedRecipe.title,
+          url: updatedRecipe.url,
+          ingredientsRaw: updatedRecipe.ingredientsRaw,
+        },
+        ingredients: updatedIngredients,
+      };
+    }
+
     const [savedRecipe] = await tx
       .insert(recipes)
       .values({
