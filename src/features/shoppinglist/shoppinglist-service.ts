@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { db } from "../../db/drizzle/index";
 import {
   dayPlan,
@@ -91,7 +91,8 @@ export const getShoppingListByWeekPlanId = async (
   const shoppingListRows = await db
     .select()
     .from(shoppingListItem)
-    .where(eq(shoppingListItem.weekPlanId, weekPlanId));
+    .where(eq(shoppingListItem.weekPlanId, weekPlanId))
+    .orderBy(asc(shoppingListItem.name));
 
   const shoppingList = shoppingListRows.map((shoppingListRow) => {
     return {
@@ -120,7 +121,8 @@ export const syncShoppingListForWeekPlan = async (
     })
     .from(dayPlan)
     .innerJoin(ingredient, eq(dayPlan.recipeId, ingredient.recipeId))
-    .where(eq(dayPlan.weekPlanId, weekPlanId));
+    .where(eq(dayPlan.weekPlanId, weekPlanId))
+    .orderBy(asc(ingredient.name));
 
   const shoppingListItems = buildShoppingListItemsForWeekPlan(
     weekPlanId,
