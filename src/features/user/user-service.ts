@@ -1,7 +1,8 @@
-import { db } from "../../db/drizzle";
+import { db } from "../../db/drizzle/index";
 import { users } from "../../db/drizzle/schema";
-import { ApiUserSelectSchema } from "./user-model";
+import type { ApiUserSelectSchema } from "./user-model";
 
 export const getAllUsers = async (): Promise<ApiUserSelectSchema[]> => {
-  return db.select().from(users);
+  const userRows = await db.select().from(users);
+  return userRows;
 };

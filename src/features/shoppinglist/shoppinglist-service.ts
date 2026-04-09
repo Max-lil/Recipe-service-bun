@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { db } from "../../db/drizzle";
+import { db } from "../../db/drizzle/index";
 import {
   dayPlan,
   ingredient,
@@ -20,25 +20,31 @@ type ShoppingListInsertRow = {
   weekPlanId: number;
 };
 
-type ShoppingListResponseRow = typeof shoppingListItem.$inferSelect & {
+type GroupedIngredient = {
+  name: string;
+  quantity: number;
+  unit: string;
+};
+
+type ShoppingListResponseRow = Omit<
+  typeof shoppingListItem.$inferSelect,
+  "quantity"
+> & {
   quantity: number | null;
 };
 
-const normalizeValue = (value: string) => value.trim().toLowerCase();
+const normalizeGroupingValue = (value: string) => value.trim().toLowerCase();
 
 export const buildShoppingListItemsForWeekPlan = (
   weekPlanId: number,
   ingredientRows: WeekPlanIngredientRow[],
 ): ShoppingListInsertRow[] => {
-  const groupedIngredients = new Map<
-    string,
-    { name: string; quantity: number; unit: string }
-  >();
+  const groupedIngredients = new Map<string, GroupedIngredient>();
 
   for (const ingredientRow of ingredientRows) {
     const name = ingredientRow.name.trim() || ingredientRow.name;
     const unit = ingredientRow.unit.trim() || ingredientRow.unit;
-    const key = `${normalizeValue(name)}::${normalizeValue(unit)}`;
+    const key = `${normalizeGroupingValue(name)}::${normalizeGroupingValue(unit)}`;
     const quantity = ingredientRow.quantity ?? 0;
     const existingIngredient = groupedIngredients.get(key);
 
@@ -54,25 +60,36 @@ export const buildShoppingListItemsForWeekPlan = (
     });
   }
 
-  return Array.from(groupedIngredients.values()).map((ingredientRow) => ({
-    checked: false,
-    name: ingredientRow.name,
-    quantity: ingredientRow.quantity,
-    unit: ingredientRow.unit,
-    weekPlanId,
-  }));
+  const shoppingListItems: ShoppingListInsertRow[] = [];
+
+  groupedIngredients.forEach((groupedIngredient) => {
+    shoppingListItems.push({
+      checked: false,
+      name: groupedIngredient.name,
+      quantity: groupedIngredient.quantity,
+      unit: groupedIngredient.unit,
+      weekPlanId,
+    });
+  });
+
+  return shoppingListItems;
 };
 
-export const getShoppinglistByWeekPlanId = async (id: number) => {
-  const ingredients = await db
+export const getShoppingListByWeekPlanId = async (
+  weekPlanId: number,
+): Promise<ShoppingListResponseRow[]> => {
+  const shoppingListRows = await db
     .select()
     .from(shoppingListItem)
-    .where(eq(shoppingListItem.weekPlanId, id));
+    .where(eq(shoppingListItem.weekPlanId, weekPlanId));
 
-  return ingredients.map<ShoppingListResponseRow>((ingredientRow) => ({
-    ...ingredientRow,
-    quantity: ingredientRow.quantity === 0 ? null : ingredientRow.quantity,
-  }));
+  return shoppingListRows.map((shoppingListRow) => {
+    return {
+      ...shoppingListRow,
+      quantity:
+        shoppingListRow.quantity === 0 ? null : shoppingListRow.quantity,
+    };
+  });
 };
 
 export const syncShoppingListForWeekPlan = async (

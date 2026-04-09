@@ -1,17 +1,25 @@
-import { Hono } from "hono";
-import * as service from "./recipe-service";
 import { zValidator } from "@hono/zod-validator";
-import { recipeCreateSchema, recipeScrapeRequestSchema } from "./recipe-model";
+import { Hono } from "hono";
+import {
+  recipeCreateSchema,
+  recipeScrapeRequestSchema,
+  type ApiRecipeCreateSchema,
+} from "./recipe-model";
 import { RecipeScrapeError } from "./recipe-scraper";
+import * as recipeService from "./recipe-service";
 
-const app = new Hono();
+const router = new Hono();
 
-app.get("/", async (c) => {
-  const recipes = await service.getAllRecipes();
+const createRecipe = async (recipeData: ApiRecipeCreateSchema) => {
+  return recipeService.createRecipe(recipeData);
+};
+
+router.get("/", async (c) => {
+  const recipes = await recipeService.getAllRecipes();
   return c.json(recipes, 200);
 });
 
-app.post(
+router.post(
   "/scrape",
   zValidator("json", recipeScrapeRequestSchema, (result, c) => {
     if (!result.success) {
@@ -26,8 +34,8 @@ app.post(
   }),
   async (c) => {
     try {
-      const payload = c.req.valid("json");
-      const recipe = await service.scrapeAndSaveRecipe(payload);
+      const recipeData = c.req.valid("json");
+      const recipe = await recipeService.scrapeAndSaveRecipe(recipeData);
       return c.json(recipe, 200);
     } catch (error) {
       if (error instanceof RecipeScrapeError) {
@@ -39,7 +47,7 @@ app.post(
   },
 );
 
-app.post(
+router.post(
   "/",
   zValidator("json", recipeCreateSchema, (result, c) => {
     if (!result.success) {
@@ -53,13 +61,13 @@ app.post(
     }
   }),
   async (c) => {
-    const payload = c.req.valid("json");
-    const recipe = await service.createRecipe(payload);
+    const recipeData = c.req.valid("json");
+    const recipe = await createRecipe(recipeData);
     return c.json(recipe, 201);
   },
 );
 
-app.post(
+router.post(
   "/add",
   zValidator("json", recipeCreateSchema, (result, c) => {
     if (!result.success) {
@@ -73,10 +81,10 @@ app.post(
     }
   }),
   async (c) => {
-    const payload = c.req.valid("json");
-    const recipe = await service.createRecipe(payload);
+    const recipeData = c.req.valid("json");
+    const recipe = await createRecipe(recipeData);
     return c.json(recipe, 201);
   },
 );
 
-export default app;
+export default router;

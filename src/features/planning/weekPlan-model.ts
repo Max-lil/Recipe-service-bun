@@ -1,28 +1,35 @@
-import { createSelectSchema } from "drizzle-zod";
-import { weekPlan } from "../../db/drizzle/schema";
-import z from "zod";
-import { recipeBasicSchema } from "../recipe/recipe-model";
 import { addDays, format, getDay, isValid, parseISO } from "date-fns";
+import { createSelectSchema } from "drizzle-zod";
+import { z } from "zod";
+import { weekPlan } from "../../db/drizzle/schema";
+import { recipeBasicSchema } from "../recipe/recipe-model";
 
 export const weekPlanSelectSchema = createSelectSchema(weekPlan);
+
+const isValidIsoDateString = (value: string) => {
+  const parsedDate = parseISO(value);
+  return isValid(parsedDate) && format(parsedDate, "yyyy-MM-dd") === value;
+};
+
 const isoDateStringSchema = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "Expected date format yyyy-MM-dd")
-  .refine((value) => {
-    const parsedDate = parseISO(value);
-    return isValid(parsedDate) && format(parsedDate, "yyyy-MM-dd") === value;
-  }, "Invalid calendar date");
+  .refine(isValidIsoDateString, "Invalid calendar date");
 
 const mondayDateStringSchema = isoDateStringSchema.refine(
   (value) => getDay(parseISO(value)) === 1,
   "weekStartDate must be a Monday",
 );
 
-export const buildWeekDates = (weekStartDate: string) => {
+export const buildWeekDates = (weekStartDate: string): string[] => {
   const startDate = parseISO(weekStartDate);
-  return Array.from({ length: 7 }, (_, index) =>
-    format(addDays(startDate, index), "yyyy-MM-dd"),
-  );
+  const weekDates: string[] = [];
+
+  for (let dayOffset = 0; dayOffset < 7; dayOffset += 1) {
+    weekDates.push(format(addDays(startDate, dayOffset), "yyyy-MM-dd"));
+  }
+
+  return weekDates;
 };
 
 export const weekPlanRequestSchema = z.object({
@@ -44,7 +51,9 @@ export const weekPlanSaveSchema = z
   .superRefine((value, ctx) => {
     const expectedDates = buildWeekDates(value.weekStartDate);
 
-    value.days.forEach((day, index) => {
+    for (let index = 0; index < value.days.length; index += 1) {
+      const day = value.days[index];
+
       if (day.plannedDate !== expectedDates[index]) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -52,7 +61,7 @@ export const weekPlanSaveSchema = z
           message: `plannedDate must match ${expectedDates[index]}`,
         });
       }
-    });
+    }
   });
 
 export const weekPlanDayResponseSchema = z.object({

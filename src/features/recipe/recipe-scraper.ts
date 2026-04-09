@@ -1,4 +1,3 @@
-import { load } from "cheerio/lib/slim";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 
 const KNOWN_UNITS = new Set([
@@ -25,13 +24,24 @@ const KNOWN_UNITS = new Set([
   "teskedar",
   "matsked",
   "matskedar",
-  "kryddmått",
+  "kryddm\u00e5tt",
   "styck",
   "stck",
   "stycken",
   "nypa",
   "nypor",
 ]);
+
+const UNIT_ALIASES: Record<string, string> = {
+  tbsp: "msk",
+  tbsps: "msk",
+  tablespoon: "msk",
+  tablespoons: "msk",
+  tsp: "tsk",
+  tsps: "tsk",
+  teaspoon: "tsk",
+  teaspoons: "tsk",
+};
 
 const UNICODE_FRACTIONS = new Map([
   ["1/2", 0.5],
@@ -43,23 +53,39 @@ const UNICODE_FRACTIONS = new Map([
   ["3/8", 0.375],
   ["5/8", 0.625],
   ["7/8", 0.875],
-  ["½", 0.5],
-  ["⅓", 1 / 3],
-  ["⅔", 2 / 3],
-  ["¼", 0.25],
-  ["¾", 0.75],
-  ["⅛", 0.125],
-  ["⅜", 0.375],
-  ["⅝", 0.625],
-  ["⅞", 0.875],
+  ["\u00bd", 0.5],
+  ["\u2153", 1 / 3],
+  ["\u2154", 2 / 3],
+  ["\u00bc", 0.25],
+  ["\u00be", 0.75],
+  ["\u215b", 0.125],
+  ["\u215c", 0.375],
+  ["\u215d", 0.625],
+  ["\u215e", 0.875],
 ]);
 
-const DOM_INGREDIENT_SELECTORS = [
-  '[itemprop="recipeIngredient"]',
-  ".ingredients li",
-  ".recipe-ingredients li",
-  ".ingredients-list li",
+const DOM_INGREDIENT_LIST_CLASSES = [
+  "ingredients",
+  "recipe-ingredients",
+  "ingredients-list",
 ];
+
+const VOID_TAGS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
+]);
 
 export class RecipeScrapeError extends Error {
   status: ContentfulStatusCode;
@@ -89,6 +115,8 @@ type JsonLdRecipeData = {
   ingredients: string[];
 };
 
+type JsonRecord = Record<string, unknown>;
+
 type QuantityParseResult = {
   quantity: number;
   tokensConsumed: number;
@@ -104,6 +132,20 @@ type NormalizeIngredientLineOptions = {
   domLines?: string[];
 };
 
+type HtmlAttributes = Record<string, string>;
+
+type OpenHtmlTag = {
+  tagName: string;
+  attributes: HtmlAttributes;
+  capturedTextParts: string[] | null;
+};
+
+type HtmlMatcher = (
+  tagName: string,
+  attributes: HtmlAttributes,
+  ancestors: OpenHtmlTag[],
+) => boolean;
+
 export const scrapeRecipeFromUrl = async (
   url: string,
   fetchImpl: typeof fetch = fetch,
@@ -115,7 +157,7 @@ export const scrapeRecipeFromUrl = async (
 export const fetchRecipeHtml = async (
   url: string,
   fetchImpl: typeof fetch = fetch,
-) => {
+): Promise<string> => {
   const response = await fetchImpl(url, {
     headers: {
       Accept: "text/html,application/xhtml+xml",
@@ -131,6 +173,7 @@ export const fetchRecipeHtml = async (
   }
 
   const contentType = response.headers.get("content-type")?.toLowerCase();
+
   if (
     contentType &&
     !contentType.includes("text/html") &&
@@ -139,18 +182,22 @@ export const fetchRecipeHtml = async (
     throw new RecipeScrapeError(502, "Recipe URL did not return an HTML page");
   }
 
-  return response.text();
+  return await response.text();
 };
 
 export const extractScrapedRecipeFromHtml = (html: string): ScrapedRecipe => {
   const jsonLdRecipe = extractRecipeFromJsonLd(html);
   const domIngredientLines = extractRecipeFromDom(html);
-  const ingredientLines =
-    jsonLdRecipe.ingredients.length > 0
-      ? jsonLdRecipe.ingredients
-      : domIngredientLines;
+  let ingredientLines = domIngredientLines;
+  let domLines: string[] | undefined;
+
+  if (jsonLdRecipe.ingredients.length > 0) {
+    ingredientLines = jsonLdRecipe.ingredients;
+    domLines = domIngredientLines;
+  }
+
   const normalizedLines = normalizeIngredientLines(ingredientLines, {
-    domLines: jsonLdRecipe.ingredients.length > 0 ? domIngredientLines : undefined,
+    domLines,
   });
 
   if (normalizedLines.length === 0) {
@@ -160,98 +207,157 @@ export const extractScrapedRecipeFromHtml = (html: string): ScrapedRecipe => {
     );
   }
 
+  const ingredients: ScrapedIngredient[] = [];
+
+  for (const line of normalizedLines) {
+    ingredients.push(parseIngredientLine(line));
+  }
+
   return {
     title: jsonLdRecipe.title ?? extractPageTitle(html),
     ingredientsRaw: normalizedLines.join("\n"),
-    ingredients: normalizedLines.map((line) => parseIngredientLine(line)),
+    ingredients,
   };
 };
 
 export const extractRecipeFromJsonLd = (html: string): JsonLdRecipeData => {
-  const $ = load(html);
   let title: string | null = null;
-  const ingredients = new Set<string>();
+  const ingredients: string[] = [];
+  const seenIngredients = new Set<string>();
 
-  $('script[type="application/ld+json"]').each((_, element) => {
-    const rawJson = $(element).html();
+  const scriptContents = extractTextFromHtml(html, (tagName, attributes) => {
+    return tagName === "script" && attributes.type === "application/ld+json";
+  });
+
+  for (const rawJson of scriptContents) {
     if (!rawJson) {
-      return;
+      continue;
     }
 
     try {
-      const parsed = JSON.parse(rawJson);
-      const candidates = collectJsonLdObjects(parsed);
+      const parsedJson = JSON.parse(rawJson);
+      const jsonObjects = collectJsonLdObjects(parsedJson);
 
-      for (const candidate of candidates) {
-        if (!isRecipeNode(candidate)) {
+      for (const jsonObject of jsonObjects) {
+        if (!isRecipeNode(jsonObject)) {
           continue;
         }
 
         if (!title) {
-          title = getTextValue(candidate.name);
+          const recipeTitle = getTextValue(jsonObject.name);
+
+          if (recipeTitle) {
+            title = recipeTitle;
+          }
         }
 
-        const recipeIngredients = Array.isArray(candidate.recipeIngredient)
-          ? candidate.recipeIngredient
+        const recipeIngredients = Array.isArray(jsonObject.recipeIngredient)
+          ? jsonObject.recipeIngredient
           : [];
 
-        for (const ingredient of recipeIngredients) {
-          const line = getTextValue(ingredient);
-          if (line) {
-            ingredients.add(line);
+        for (const ingredientValue of recipeIngredients) {
+          const ingredientLine = cleanIngredientLine(
+            getTextValue(ingredientValue),
+          );
+
+          if (!ingredientLine || seenIngredients.has(ingredientLine)) {
+            continue;
           }
+
+          seenIngredients.add(ingredientLine);
+          ingredients.push(ingredientLine);
         }
       }
     } catch {
-      return;
-    }
-  });
-
-  return {
-    title,
-    ingredients: Array.from(ingredients),
-  };
-};
-
-export const extractRecipeFromDom = (html: string) => {
-  const $ = load(html);
-  const ingredients = new Set<string>();
-
-  for (const selector of DOM_INGREDIENT_SELECTORS) {
-    $(selector).each((_, element) => {
-      const line = normalizeWhitespace($(element).text());
-      if (line) {
-        ingredients.add(line);
-      }
-    });
-
-    if (ingredients.size > 0) {
-      break;
+      continue;
     }
   }
 
-  return Array.from(ingredients);
+  return {
+    title,
+    ingredients,
+  };
+};
+
+export const extractRecipeFromDom = (html: string): string[] => {
+  const ingredientPropertyLines = collectUniqueIngredientLines(
+    extractTextFromHtml(html, (_, attributes) => {
+      return attributes.itemprop === "recipeIngredient";
+    }),
+  );
+
+  if (ingredientPropertyLines.length > 0) {
+    return ingredientPropertyLines;
+  }
+
+  for (const className of DOM_INGREDIENT_LIST_CLASSES) {
+    const ingredientLines = collectUniqueIngredientLines(
+      extractTextFromHtml(html, (tagName, _, ancestors) => {
+        if (tagName !== "li") {
+          return false;
+        }
+
+        for (const ancestor of ancestors) {
+          if (hasClassName(ancestor.attributes, className)) {
+            return true;
+          }
+        }
+
+        return false;
+      }),
+    );
+
+    if (ingredientLines.length > 0) {
+      return ingredientLines;
+    }
+  }
+
+  return [];
 };
 
 export const normalizeIngredientLines = (
   lines: string[],
   options: NormalizeIngredientLineOptions = {},
-) => {
-  const cleanedLines = lines
-    .map((line) => cleanIngredientLine(line))
-    .filter((line) => Boolean(line));
-  const normalizedLines = new Set<string>();
-  const cleanedDomLines = (options.domLines ?? [])
-    .map((line) => cleanIngredientLine(line))
-    .filter((line) => Boolean(line));
+): string[] => {
+  const cleanedLines: string[] = [];
+
+  for (const line of lines) {
+    const cleanedLine = cleanIngredientLine(line);
+
+    if (cleanedLine) {
+      cleanedLines.push(cleanedLine);
+    }
+  }
+
+  const cleanedDomLines: string[] = [];
+
+  for (const line of options.domLines ?? []) {
+    const cleanedLine = cleanIngredientLine(line);
+
+    if (cleanedLine) {
+      cleanedDomLines.push(cleanedLine);
+    }
+  }
+
   const domLineSet = new Set(cleanedDomLines);
-  const domOverlapCount = cleanedLines.filter((line) => domLineSet.has(line)).length;
+  let domOverlapCount = 0;
+
+  for (const cleanedLine of cleanedLines) {
+    if (domLineSet.has(cleanedLine)) {
+      domOverlapCount += 1;
+    }
+  }
+
   const hasReliableDomSignal =
     cleanedDomLines.length > 0 && domOverlapCount / cleanedDomLines.length >= 0.5;
+  const normalizedLines: string[] = [];
+  const seenLines = new Set<string>();
 
-  cleanedLines.forEach((cleanedLine, index) => {
+  for (let index = 0; index < cleanedLines.length; index += 1) {
+    const cleanedLine = cleanedLines[index];
+
     if (
-      !isIngredientSectionHeader(
+      isIngredientSectionHeader(
         cleanedLine,
         cleanedLines,
         index,
@@ -259,15 +365,23 @@ export const normalizeIngredientLines = (
         hasReliableDomSignal,
       )
     ) {
-      normalizedLines.add(cleanedLine);
+      continue;
     }
-  });
 
-  return Array.from(normalizedLines);
+    if (seenLines.has(cleanedLine)) {
+      continue;
+    }
+
+    seenLines.add(cleanedLine);
+    normalizedLines.push(cleanedLine);
+  }
+
+  return normalizedLines;
 };
 
 export const parseIngredientLine = (line: string): ScrapedIngredient => {
   const cleanedLine = cleanIngredientLine(line);
+
   if (!cleanedLine) {
     return {
       name: "Unknown ingredient",
@@ -279,10 +393,11 @@ export const parseIngredientLine = (line: string): ScrapedIngredient => {
 
   const tokens = cleanedLine.split(/\s+/);
   const structure = parseIngredientStructure(tokens);
-  const name = joinTokens(tokens, structure.nameStartIndex) || cleanedLine;
+  const ingredientName =
+    joinTokens(tokens, structure.nameStartIndex) || cleanedLine;
 
   return {
-    name,
+    name: ingredientName,
     quantity: structure.quantity,
     unit: structure.unit,
     rawText: cleanedLine,
@@ -290,29 +405,205 @@ export const parseIngredientLine = (line: string): ScrapedIngredient => {
 };
 
 const extractPageTitle = (html: string) => {
-  const $ = load(html);
-  return normalizeWhitespace($("title").first().text()) || null;
+  const titles = extractTextFromHtml(html, (tagName) => tagName === "title");
+  return normalizeWhitespace(titles[0]);
 };
 
-const collectJsonLdObjects = (value: unknown) => {
-  const objects: Record<string, any>[] = [];
+const collectUniqueIngredientLines = (lines: string[]) => {
+  const cleanedLines: string[] = [];
+  const seenLines = new Set<string>();
+
+  for (const line of lines) {
+    const cleanedLine = cleanIngredientLine(line);
+
+    if (!cleanedLine || seenLines.has(cleanedLine)) {
+      continue;
+    }
+
+    seenLines.add(cleanedLine);
+    cleanedLines.push(cleanedLine);
+  }
+
+  return cleanedLines;
+};
+
+const extractTextFromHtml = (html: string, matcher: HtmlMatcher): string[] => {
+  const results: string[] = [];
+  const openTags: OpenHtmlTag[] = [];
+  const tagPattern = /<!--[\s\S]*?-->|<\/?[^>]+>/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = tagPattern.exec(html)) !== null) {
+    const rawText = html.slice(lastIndex, match.index);
+
+    if (rawText) {
+      appendTextToCapturedTags(openTags, rawText);
+    }
+
+    const tag = match[0];
+
+    if (!tag.startsWith("<!--")) {
+      processHtmlTag(tag, openTags, results, matcher);
+    }
+
+    lastIndex = tagPattern.lastIndex;
+  }
+
+  const remainingText = html.slice(lastIndex);
+
+  if (remainingText) {
+    appendTextToCapturedTags(openTags, remainingText);
+  }
+
+  closeRemainingTags(openTags, results);
+
+  return results
+    .map((result) => normalizeWhitespace(result))
+    .filter((result) => Boolean(result));
+};
+
+const appendTextToCapturedTags = (openTags: OpenHtmlTag[], text: string) => {
+  for (const openTag of openTags) {
+    if (openTag.capturedTextParts) {
+      openTag.capturedTextParts.push(text);
+    }
+  }
+};
+
+const processHtmlTag = (
+  tag: string,
+  openTags: OpenHtmlTag[],
+  results: string[],
+  matcher: HtmlMatcher,
+) => {
+  const tagName = getTagName(tag);
+
+  if (!tagName) {
+    return;
+  }
+
+  if (tag.startsWith("</")) {
+    closeHtmlTag(tagName, openTags, results);
+    return;
+  }
+
+  if (tag.startsWith("<!")) {
+    return;
+  }
+
+  const attributes = parseHtmlAttributes(tag);
+  const captureThisTag = matcher(tagName, attributes, openTags);
+  const openTag: OpenHtmlTag = {
+    tagName,
+    attributes,
+    capturedTextParts: captureThisTag ? [] : null,
+  };
+
+  if (isSelfClosingTag(tag, tagName)) {
+    if (openTag.capturedTextParts) {
+      results.push(openTag.capturedTextParts.join(""));
+    }
+
+    return;
+  }
+
+  openTags.push(openTag);
+};
+
+const closeHtmlTag = (
+  tagName: string,
+  openTags: OpenHtmlTag[],
+  results: string[],
+) => {
+  while (openTags.length > 0) {
+    const openTag = openTags.pop();
+
+    if (!openTag) {
+      return;
+    }
+
+    if (openTag.capturedTextParts) {
+      results.push(openTag.capturedTextParts.join(""));
+    }
+
+    if (openTag.tagName === tagName) {
+      return;
+    }
+  }
+};
+
+const closeRemainingTags = (openTags: OpenHtmlTag[], results: string[]) => {
+  while (openTags.length > 0) {
+    const openTag = openTags.pop();
+
+    if (openTag?.capturedTextParts) {
+      results.push(openTag.capturedTextParts.join(""));
+    }
+  }
+};
+
+const getTagName = (tag: string) => {
+  const match = tag.match(/^<\/?\s*([^\s/>]+)/);
+  return match?.[1]?.toLowerCase() ?? "";
+};
+
+const parseHtmlAttributes = (tag: string): HtmlAttributes => {
+  const attributes: HtmlAttributes = {};
+  const attributePattern =
+    /([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = attributePattern.exec(tag)) !== null) {
+    const attributeName = match[1].toLowerCase();
+
+    if (attributeName === getTagName(tag)) {
+      continue;
+    }
+
+    attributes[attributeName] = match[2] ?? match[3] ?? match[4] ?? "";
+  }
+
+  return attributes;
+};
+
+const isSelfClosingTag = (tag: string, tagName: string) => {
+  return tag.endsWith("/>") || VOID_TAGS.has(tagName);
+};
+
+const hasClassName = (attributes: HtmlAttributes, className: string) => {
+  const classValue = attributes.class;
+
+  if (!classValue) {
+    return false;
+  }
+
+  return classValue
+    .split(/\s+/)
+    .some((currentClassName) => currentClassName === className);
+};
+
+const collectJsonLdObjects = (value: unknown): JsonRecord[] => {
+  const objects: JsonRecord[] = [];
 
   if (Array.isArray(value)) {
     for (const item of value) {
       objects.push(...collectJsonLdObjects(item));
     }
+
     return objects;
   }
 
-  if (!value || typeof value !== "object") {
+  if (!isJsonRecord(value)) {
     return objects;
   }
 
-  const objectValue = value as Record<string, any>;
-  objects.push(objectValue);
+  objects.push(value);
 
-  if (Array.isArray(objectValue["@graph"])) {
-    for (const graphNode of objectValue["@graph"]) {
+  const graphValue = value["@graph"];
+
+  if (Array.isArray(graphValue)) {
+    for (const graphNode of graphValue) {
       objects.push(...collectJsonLdObjects(graphNode));
     }
   }
@@ -320,17 +611,23 @@ const collectJsonLdObjects = (value: unknown) => {
   return objects;
 };
 
-const isRecipeNode = (value: Record<string, any>) => {
+const isJsonRecord = (value: unknown): value is JsonRecord => {
+  return Boolean(value) && typeof value === "object";
+};
+
+const isRecipeNode = (value: JsonRecord) => {
   const typeValue = value["@type"];
+
   if (typeof typeValue === "string") {
     return typeValue.toLowerCase().includes("recipe");
   }
 
   if (Array.isArray(typeValue)) {
-    return typeValue.some(
-      (entry) =>
-        typeof entry === "string" && entry.toLowerCase().includes("recipe"),
-    );
+    for (const entry of typeValue) {
+      if (typeof entry === "string" && entry.toLowerCase().includes("recipe")) {
+        return true;
+      }
+    }
   }
 
   return false;
@@ -341,21 +638,62 @@ const getTextValue = (value: unknown) => {
     return normalizeWhitespace(value);
   }
 
-  if (value && typeof value === "object") {
-    const objectValue = value as Record<string, unknown>;
-    if (typeof objectValue.text === "string") {
-      return normalizeWhitespace(objectValue.text);
-    }
-    if (typeof objectValue.name === "string") {
-      return normalizeWhitespace(objectValue.name);
-    }
+  if (!isJsonRecord(value)) {
+    return "";
+  }
+
+  if (typeof value.text === "string") {
+    return normalizeWhitespace(value.text);
+  }
+
+  if (typeof value.name === "string") {
+    return normalizeWhitespace(value.name);
   }
 
   return "";
 };
 
-const cleanIngredientLine = (line: string) => {
-  return normalizeWhitespace(line).replace(/^[\-\*\u2022\s]+/, "").trim();
+const cleanIngredientLine = (line: string | null | undefined) => {
+  const lineWithoutBullets = normalizeWhitespace(line).replace(
+    /^[\-\*\u2022\s]+/,
+    "",
+  );
+
+  if (!lineWithoutBullets) {
+    return "";
+  }
+
+  return normalizeIngredientWords(lineWithoutBullets).trim();
+};
+
+const normalizeIngredientWords = (line: string) => {
+  const tokens = line.split(/\s+/);
+  const normalizedTokens: string[] = [];
+
+  for (const token of tokens) {
+    normalizedTokens.push(replaceUnitAlias(token));
+  }
+
+  return normalizedTokens.join(" ");
+};
+
+const replaceUnitAlias = (token: string) => {
+  const match = token.match(
+    /^([^a-z\u00e5\u00e4\u00f6]*)([a-z\u00e5\u00e4\u00f6]+)([^a-z\u00e5\u00e4\u00f6]*)$/i,
+  );
+
+  if (!match) {
+    return token;
+  }
+
+  const [, prefix, word, suffix] = match;
+  const replacement = UNIT_ALIASES[word.toLowerCase()];
+
+  if (!replacement) {
+    return token;
+  }
+
+  return `${prefix}${replacement}${suffix}`;
 };
 
 const isIngredientSectionHeader = (
@@ -366,16 +704,19 @@ const isIngredientSectionHeader = (
   hasReliableDomSignal: boolean,
 ) => {
   const candidate = stripTrailingHeaderPunctuation(line);
+
   if (!candidate || /\d/.test(candidate) || /[(),]/.test(candidate)) {
     return false;
   }
 
   const tokens = candidate.split(/\s+/);
+
   if (tokens.length === 0 || tokens.length > 4) {
     return false;
   }
 
   const structure = parseIngredientStructure(tokens);
+
   if (structure.quantity !== null || structure.unit) {
     return false;
   }
@@ -416,6 +757,7 @@ const stripTrailingHeaderPunctuation = (line: string) =>
 
 const looksLikeIngredientContent = (line: string) => {
   const cleanedLine = cleanIngredientLine(line);
+
   if (!cleanedLine) {
     return false;
   }
@@ -433,7 +775,9 @@ const looksLikeIngredientContent = (line: string) => {
 
 const looksLikeSectionLabel = (line: string) => {
   const tokens = line.split(/\s+/);
-  if (!startsWithUppercase(tokens[0] ?? "")) {
+  const firstToken = tokens[0] ?? "";
+
+  if (!startsWithUppercase(firstToken)) {
     return false;
   }
 
@@ -459,6 +803,7 @@ const parseIngredientStructure = (
   }
 
   let unit = "";
+
   if (quantity !== null && index < tokens.length && isKnownUnit(tokens[index])) {
     unit = normalizeUnit(tokens[index]);
     index += 1;
@@ -476,31 +821,37 @@ const parseLeadingQuantity = (tokens: string[]): QuantityParseResult | null => {
     return null;
   }
 
-  if (tokens.length >= 2 && isWholeNumber(tokens[0]) && isFractionToken(tokens[1])) {
-    const first = parseSingleQuantity(tokens[0]);
-    const second = parseSingleQuantity(tokens[1]);
+  if (
+    tokens.length >= 2 &&
+    isWholeNumber(tokens[0]) &&
+    isFractionToken(tokens[1])
+  ) {
+    const wholeNumber = parseSingleQuantity(tokens[0]);
+    const fraction = parseSingleQuantity(tokens[1]);
 
-    if (first !== null && second !== null) {
+    if (wholeNumber !== null && fraction !== null) {
       return {
-        quantity: first + second,
+        quantity: wholeNumber + fraction,
         tokensConsumed: 2,
       };
     }
   }
 
-  const first = parseSingleQuantity(tokens[0]);
-  if (first === null) {
+  const quantity = parseSingleQuantity(tokens[0]);
+
+  if (quantity === null) {
     return null;
   }
 
   return {
-    quantity: first,
+    quantity,
     tokensConsumed: 1,
   };
 };
 
 const parseSingleQuantity = (token: string) => {
   const normalizedToken = normalizeNumericToken(token);
+
   if (!normalizedToken) {
     return null;
   }
@@ -511,9 +862,11 @@ const parseSingleQuantity = (token: string) => {
 
   if (/^\d+\/\d+$/.test(normalizedToken)) {
     const [numerator, denominator] = normalizedToken.split("/").map(Number);
+
     if (!denominator) {
       return null;
     }
+
     return numerator / denominator;
   }
 
@@ -532,17 +885,30 @@ const normalizeNumericToken = (token: string) => {
     .replace(/[\),.;:]+$/, "");
 };
 
-const isWholeNumber = (token: string) => /^\d+$/.test(normalizeNumericToken(token));
+const isWholeNumber = (token: string) => {
+  return /^\d+$/.test(normalizeNumericToken(token));
+};
 
 const isFractionToken = (token: string) => {
   const normalizedToken = normalizeNumericToken(token);
-  return /^\d+\/\d+$/.test(normalizedToken) || UNICODE_FRACTIONS.has(normalizedToken);
+
+  return (
+    /^\d+\/\d+$/.test(normalizedToken) ||
+    UNICODE_FRACTIONS.has(normalizedToken)
+  );
 };
 
-const isKnownUnit = (token: string) => KNOWN_UNITS.has(normalizeUnit(token));
+const isKnownUnit = (token: string) => {
+  return KNOWN_UNITS.has(normalizeUnit(token));
+};
+
+const getFirstCharacter = (value: string) => {
+  return Array.from(value.trim())[0];
+};
 
 const startsWithUppercase = (value: string) => {
-  const firstCharacter = Array.from(value.trim())[0];
+  const firstCharacter = getFirstCharacter(value);
+
   if (!firstCharacter) {
     return false;
   }
@@ -554,7 +920,8 @@ const startsWithUppercase = (value: string) => {
 };
 
 const startsWithLowercase = (value: string) => {
-  const firstCharacter = Array.from(value.trim())[0];
+  const firstCharacter = getFirstCharacter(value);
+
   if (!firstCharacter) {
     return false;
   }
@@ -568,8 +935,8 @@ const startsWithLowercase = (value: string) => {
 const normalizeUnit = (token: string) => {
   return token
     .toLowerCase()
-    .replace(/^[^a-z]+/, "")
-    .replace(/[^a-z]+$/, "");
+    .replace(/^[^a-z\u00e5\u00e4\u00f6]+/i, "")
+    .replace(/[^a-z\u00e5\u00e4\u00f6]+$/i, "");
 };
 
 const joinTokens = (tokens: string[], startIndex: number) => {

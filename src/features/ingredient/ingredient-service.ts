@@ -1,12 +1,15 @@
-import { db } from "../../db/drizzle";
-import { and, asc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
+import { db } from "../../db/drizzle/index";
 import { ingredient } from "../../db/drizzle/schema";
-import { ApiIngredientSelectSchema } from "./ingredient-model";
+import type { ApiIngredientSelectSchema } from "./ingredient-model";
 
-export const getAllIngredientsByRecipeId = async (id: number) => {
-  const ingredients = await db
+export const getAllIngredientsByRecipeId = async (
+  recipeId: number,
+): Promise<ApiIngredientSelectSchema[]> => {
+  const ingredientRows = await db
     .select()
     .from(ingredient)
-    .where(eq(ingredient.recipeId, id));
-  return ingredients;
+    .where(eq(ingredient.recipeId, recipeId));
+
+  return ingredientRows;
 };

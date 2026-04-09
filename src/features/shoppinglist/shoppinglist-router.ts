@@ -1,15 +1,15 @@
 import { Hono } from "hono";
-import * as service from "./shoppinglist-service";
+import * as shoppingListService from "./shoppinglist-service";
 
-export const app = new Hono();
+const router = new Hono();
 
-app.get("/:weekPlanId", async (c) => {
-  const weekPlanId = c.req.param("weekPlanId");
-  const response = await service.getShoppinglistByWeekPlanId(
-    Number(weekPlanId),
+router.get("/:weekPlanId", async (c) => {
+  const weekPlanId = Number(c.req.param("weekPlanId"));
+  const shoppingList = await shoppingListService.getShoppingListByWeekPlanId(
+    weekPlanId,
   );
 
-  return c.json(response);
+  return c.json(shoppingList);
 });
 
-export default app;
+export default router;

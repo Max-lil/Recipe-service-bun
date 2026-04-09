@@ -1,6 +1,6 @@
 import { createSelectSchema } from "drizzle-zod";
+import { z } from "zod";
 import { ingredient } from "../../db/drizzle/schema";
-import z from "zod";
 
 export const ingredientSelectSchema = createSelectSchema(ingredient);
 

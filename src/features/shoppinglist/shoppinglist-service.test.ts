@@ -1,7 +1,13 @@
-import { describe, expect, test } from "bun:test";
-import { buildShoppingListItemsForWeekPlan } from "./shoppinglist-service";
+import { beforeAll, describe, expect, mock, test } from "bun:test";
+
+let buildShoppingListItemsForWeekPlan: typeof import("./shoppinglist-service")["buildShoppingListItemsForWeekPlan"];
 
 describe("shopping list sync", () => {
+  beforeAll(async () => {
+    mock.restore();
+    ({ buildShoppingListItemsForWeekPlan } = await import("./shoppinglist-service"));
+  });
+
   test("creates shopping list rows for a week", () => {
     const result = buildShoppingListItemsForWeekPlan(12, [
       { name: "Milk", quantity: 2, unit: "dl" },

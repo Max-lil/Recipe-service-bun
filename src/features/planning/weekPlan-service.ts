@@ -1,14 +1,17 @@
 import { and, asc, eq, sql } from "drizzle-orm";
-import { db } from "../../db/drizzle";
+import { db } from "../../db/drizzle/index";
 import { dayPlan, recipes, weekPlan } from "../../db/drizzle/schema";
 import { syncShoppingListForWeekPlan } from "../shoppinglist/shoppinglist-service";
-import {
+import type {
+  ApiWeekPlanDayResponseSchema,
   ApiWeekPlanRequestSchema,
   ApiWeekPlanResponseSchema,
   ApiWeekPlanSaveSchema,
 } from "./weekPlan-model";
 
-type StoredWeekPlan = {
+type DatabaseClient = typeof db;
+
+type StoredWeekPlanRow = {
   id: number;
   userId: number;
   weekStartDate: string;
@@ -23,32 +26,55 @@ type StoredWeekPlanDayRow = {
   recipeUrl: string | null;
 };
 
-const mapWeekPlanResponse = (
-  storedWeekPlan: StoredWeekPlan,
-  dayRows: StoredWeekPlanDayRow[],
-): ApiWeekPlanResponseSchema => ({
-  id: storedWeekPlan.id,
-  weekStartDate: storedWeekPlan.weekStartDate,
-  status: storedWeekPlan.status,
-  days: dayRows.map((dayRow) => ({
+const getTransactionDatabase = (transaction: unknown): DatabaseClient => {
+  return transaction as DatabaseClient;
+};
+
+const mapWeekPlanDay = (
+  dayRow: StoredWeekPlanDayRow,
+): ApiWeekPlanDayResponseSchema => {
+  if (dayRow.recipeId === null || dayRow.recipeTitle === null) {
+    return {
+      id: dayRow.id,
+      plannedDate: dayRow.plannedDate,
+      recipe: null,
+    };
+  }
+
+  return {
     id: dayRow.id,
     plannedDate: dayRow.plannedDate,
-    recipe:
-      dayRow.recipeId === null
-        ? null
-        : {
-            id: dayRow.recipeId,
-            title: dayRow.recipeTitle!,
-            url: dayRow.recipeUrl,
-          },
-  })),
-});
+    recipe: {
+      id: dayRow.recipeId,
+      title: dayRow.recipeTitle,
+      url: dayRow.recipeUrl,
+    },
+  };
+};
 
-const getWeekPlanBody = async (
-  database: typeof db,
+const mapWeekPlanResponse = (
+  storedWeekPlan: StoredWeekPlanRow,
+  dayRows: StoredWeekPlanDayRow[],
+): ApiWeekPlanResponseSchema => {
+  const days: ApiWeekPlanDayResponseSchema[] = [];
+
+  for (const dayRow of dayRows) {
+    days.push(mapWeekPlanDay(dayRow));
+  }
+
+  return {
+    id: storedWeekPlan.id,
+    weekStartDate: storedWeekPlan.weekStartDate,
+    status: storedWeekPlan.status,
+    days,
+  };
+};
+
+const getWeekPlanRow = async (
+  database: DatabaseClient,
   data: ApiWeekPlanRequestSchema,
-) => {
-  const weekPlans = await database
+): Promise<StoredWeekPlanRow | null> => {
+  const weekPlanRows = await database
     .select({
       id: weekPlan.id,
       userId: weekPlan.userId,
@@ -63,11 +89,14 @@ const getWeekPlanBody = async (
       ),
     );
 
-  return weekPlans[0] ?? null;
+  return weekPlanRows[0] ?? null;
 };
 
-const getWeekPlanDayRows = async (database: typeof db, weekPlanId: number) => {
-  return database
+const getWeekPlanDayRows = async (
+  database: DatabaseClient,
+  weekPlanId: number,
+): Promise<StoredWeekPlanDayRow[]> => {
+  const dayRows = await database
     .select({
       id: dayPlan.id,
       plannedDate: dayPlan.plannedDate,
@@ -79,13 +108,15 @@ const getWeekPlanDayRows = async (database: typeof db, weekPlanId: number) => {
     .leftJoin(recipes, eq(dayPlan.recipeId, recipes.id))
     .where(eq(dayPlan.weekPlanId, weekPlanId))
     .orderBy(asc(dayPlan.plannedDate));
+
+  return dayRows;
 };
 
-const createWeekPlanBody = async (
-  database: typeof db,
+const createWeekPlanRow = async (
+  database: DatabaseClient,
   data: ApiWeekPlanRequestSchema,
-) => {
-  const [weekPlanBody] = await database
+): Promise<StoredWeekPlanRow> => {
+  const weekPlanRows = await database
     .insert(weekPlan)
     .values({
       userId: data.userId,
@@ -99,42 +130,46 @@ const createWeekPlanBody = async (
       status: weekPlan.status,
     });
 
-  return weekPlanBody;
+  return weekPlanRows[0];
 };
 
 export const getSavedWeekPlan = async (
   data: ApiWeekPlanRequestSchema,
 ): Promise<ApiWeekPlanResponseSchema | null> => {
-  const weekPlanBody = await getWeekPlanBody(db, data);
+  const weekPlanRow = await getWeekPlanRow(db, data);
 
-  if (!weekPlanBody) {
+  if (!weekPlanRow) {
     return null;
   }
 
-  const dayRows = await getWeekPlanDayRows(db, weekPlanBody.id);
-  return mapWeekPlanResponse(weekPlanBody, dayRows);
+  const dayRows = await getWeekPlanDayRows(db, weekPlanRow.id);
+  return mapWeekPlanResponse(weekPlanRow, dayRows);
 };
 
 export const saveWeekPlan = async (
   data: ApiWeekPlanSaveSchema,
 ): Promise<ApiWeekPlanResponseSchema> => {
-  return db.transaction(async (tx) => {
-    const transactionDb = tx as unknown as typeof db;
-    let weekPlanBody = await getWeekPlanBody(transactionDb, data);
+  return db.transaction(async (transaction) => {
+    const database = getTransactionDatabase(transaction);
+    let weekPlanRow = await getWeekPlanRow(database, data);
 
-    if (!weekPlanBody) {
-      weekPlanBody = await createWeekPlanBody(transactionDb, data);
+    if (!weekPlanRow) {
+      weekPlanRow = await createWeekPlanRow(database, data);
     }
 
-    await transactionDb
+    const dayPlanValues = [];
+
+    for (const day of data.days) {
+      dayPlanValues.push({
+        weekPlanId: weekPlanRow.id,
+        plannedDate: day.plannedDate,
+        recipeId: day.recipeId,
+      });
+    }
+
+    await database
       .insert(dayPlan)
-      .values(
-        data.days.map((day) => ({
-          weekPlanId: weekPlanBody.id,
-          plannedDate: day.plannedDate,
-          recipeId: day.recipeId,
-        })),
-      )
+      .values(dayPlanValues)
       .onConflictDoUpdate({
         target: [dayPlan.weekPlanId, dayPlan.plannedDate],
         set: {
@@ -142,9 +177,9 @@ export const saveWeekPlan = async (
         },
       });
 
-    await syncShoppingListForWeekPlan(weekPlanBody.id, transactionDb);
+    await syncShoppingListForWeekPlan(weekPlanRow.id, database);
 
-    const dayRows = await getWeekPlanDayRows(transactionDb, weekPlanBody.id);
-    return mapWeekPlanResponse(weekPlanBody, dayRows);
+    const dayRows = await getWeekPlanDayRows(database, weekPlanRow.id);
+    return mapWeekPlanResponse(weekPlanRow, dayRows);
   });
 };

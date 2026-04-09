@@ -1,60 +1,60 @@
-import { Hono } from "hono";
-import * as dayPlanservice from "./dayPlan-service";
-import * as weekPlanservice from "./weekPlan-service";
 import { zValidator } from "@hono/zod-validator";
+import { Hono } from "hono";
 import { weekPlanRequestSchema, weekPlanSaveSchema } from "./weekPlan-model";
 import { dayPlanInsertSchema } from "./dayPlan-model";
+import * as dayPlanService from "./dayPlan-service";
+import * as weekPlanService from "./weekPlan-service";
 
-const app = new Hono();
+const router = new Hono();
 
-app.get("/days", async (c) => {
-  const dayPlans = await dayPlanservice.getAllDayPlans();
+router.get("/days", async (c) => {
+  const dayPlans = await dayPlanService.getAllDayPlans();
   return c.json(dayPlans, 200);
 });
 
-app.get("/week", zValidator("query", weekPlanRequestSchema), async (c) => {
+router.get("/week", zValidator("query", weekPlanRequestSchema), async (c) => {
   const query = c.req.valid("query");
-  const response = await weekPlanservice.getSavedWeekPlan(query);
+  const weekPlan = await weekPlanService.getSavedWeekPlan(query);
 
-  if (!response) {
+  if (!weekPlan) {
     return c.json({ message: "Week plan not found" }, 404);
   }
 
-  return c.json(response, 200);
+  return c.json(weekPlan, 200);
 });
 
-app.post("/week", zValidator("json", weekPlanRequestSchema), async (c) => {
+router.post("/week", zValidator("json", weekPlanRequestSchema), async (c) => {
   const body = c.req.valid("json");
-  const response = await weekPlanservice.getSavedWeekPlan(body);
+  const weekPlan = await weekPlanService.getSavedWeekPlan(body);
 
-  if (!response) {
+  if (!weekPlan) {
     return c.json({ message: "Week plan not found" }, 404);
   }
 
-  return c.json(response, 200);
+  return c.json(weekPlan, 200);
 });
 
-app.put("/week", zValidator("json", weekPlanSaveSchema), async (c) => {
+router.put("/week", zValidator("json", weekPlanSaveSchema), async (c) => {
   const body = c.req.valid("json");
-  const response = await weekPlanservice.saveWeekPlan(body);
+  const weekPlan = await weekPlanService.saveWeekPlan(body);
 
-  return c.json(response, 200);
+  return c.json(weekPlan, 200);
 });
 
-app.put("/day/recipe", zValidator("json", dayPlanInsertSchema), async (c) => {
+router.put("/day/recipe", zValidator("json", dayPlanInsertSchema), async (c) => {
   const body = c.req.valid("json");
-  const response = await dayPlanservice.assingRecipeToDayPlan(body);
+  const dayPlan = await dayPlanService.assignRecipeToDayPlan(body);
 
-  return c.json(response, 200);
+  return c.json(dayPlan, 200);
 });
 
-app.delete("/day/recipe/:dayPlan_Id", async (c) => {
-  const dayPlanId = c.req.param("dayPlan_Id");
-  const response = await dayPlanservice.deleteRecipeByDayPlanId(
-    Number(dayPlanId),
+router.delete("/day/recipe/:dayPlanId", async (c) => {
+  const dayPlanId = Number(c.req.param("dayPlanId"));
+  const dayPlan = await dayPlanService.deleteRecipeByDayPlanId(
+    dayPlanId,
   );
 
-  return c.json(response, 200);
+  return c.json(dayPlan, 200);
 });
 
-export default app;
+export default router;

@@ -1,7 +1,6 @@
-import { pgTable, text, integer } from "drizzle-orm/pg-core";
 import { createSelectSchema } from "drizzle-zod";
-import { users } from "../../db/drizzle/schema";
 import { z } from "zod";
+import { users } from "../../db/drizzle/schema";
 
 export const userSelectSchema = createSelectSchema(users);
 

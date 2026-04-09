@@ -1,35 +1,202 @@
 import { eq } from "drizzle-orm";
 import { db } from "../../db/drizzle/index";
 import { dayPlan, ingredient, recipes } from "../../db/drizzle/schema";
+import { syncShoppingListForWeekPlan } from "../shoppinglist/shoppinglist-service";
 import type {
   ApiRecipeCreateSchema,
+  ApiRecipeSavedIngredientSchema,
+  ApiRecipeSavedSchema,
   ApiRecipeScrapeRequestSchema,
   ApiRecipeScrapeResponseSchema,
   ApiRecipeSelectSchema,
 } from "./recipe-model";
-import { scrapeRecipeFromUrl } from "./recipe-scraper";
-import { syncShoppingListForWeekPlan } from "../shoppinglist/shoppinglist-service";
+import {
+  scrapeRecipeFromUrl,
+  type ScrapedIngredient,
+  type ScrapedRecipe,
+} from "./recipe-scraper";
 
-export const getAllRecipes = async (): Promise<ApiRecipeSelectSchema[]> => {
-  return db.select().from(recipes);
+type DatabaseClient = typeof db;
+
+type SavedRecipeRow = {
+  id: number;
+  title: string;
+  url: string | null;
+  ingredientsRaw: string | null;
 };
 
-export const createRecipe = async (data: ApiRecipeCreateSchema) => {
-  const [recipeBody] = await db
+const getTransactionDatabase = (transaction: unknown): DatabaseClient => {
+  return transaction as DatabaseClient;
+};
+
+const mapSavedRecipe = (recipeRow: SavedRecipeRow): ApiRecipeSavedSchema => {
+  return {
+    id: recipeRow.id,
+    title: recipeRow.title,
+    url: recipeRow.url,
+    ingredientsRaw: recipeRow.ingredientsRaw,
+  };
+};
+
+const buildIngredientRows = (
+  recipeId: number,
+  scrapedIngredients: ScrapedIngredient[],
+) => {
+  const ingredientRows = [];
+
+  for (const scrapedIngredient of scrapedIngredients) {
+    ingredientRows.push({
+      recipeId,
+      name: scrapedIngredient.name,
+      quantity: scrapedIngredient.quantity,
+      unit: scrapedIngredient.unit,
+      rawText: scrapedIngredient.rawText,
+    });
+  }
+
+  return ingredientRows;
+};
+
+const getRecipeByUrl = async (
+  database: DatabaseClient,
+  recipeUrl: string,
+): Promise<SavedRecipeRow | null> => {
+  const recipeRows = await database
+    .select({
+      id: recipes.id,
+      title: recipes.title,
+      url: recipes.url,
+      ingredientsRaw: recipes.ingredientsRaw,
+    })
+    .from(recipes)
+    .where(eq(recipes.url, recipeUrl));
+
+  return recipeRows[0] ?? null;
+};
+
+const saveRecipeIngredients = async (
+  database: DatabaseClient,
+  recipeId: number,
+  scrapedIngredients: ScrapedIngredient[],
+): Promise<ApiRecipeSavedIngredientSchema[]> => {
+  const ingredientRows = buildIngredientRows(recipeId, scrapedIngredients);
+
+  if (ingredientRows.length === 0) {
+    return [];
+  }
+
+  return database.insert(ingredient).values(ingredientRows).returning();
+};
+
+const getRecipeTitle = (
+  recipeData: ApiRecipeScrapeRequestSchema,
+  scrapedRecipe: ScrapedRecipe,
+  existingRecipe: SavedRecipeRow | null,
+) => {
+  const providedTitle = recipeData.title?.trim();
+
+  if (providedTitle) {
+    return providedTitle;
+  }
+
+  if (scrapedRecipe.title) {
+    return scrapedRecipe.title;
+  }
+
+  if (existingRecipe?.title) {
+    return existingRecipe.title;
+  }
+
+  return "Unknown recipe";
+};
+
+const buildScrapeResponse = (
+  recipeRow: SavedRecipeRow,
+  savedIngredients: ApiRecipeSavedIngredientSchema[],
+): ApiRecipeScrapeResponseSchema => {
+  return {
+    recipe: mapSavedRecipe(recipeRow),
+    ingredients: savedIngredients,
+  };
+};
+
+const saveNewScrapedRecipe = async (
+  database: DatabaseClient,
+  recipeUrl: string,
+  recipeTitle: string,
+  scrapedRecipe: ScrapedRecipe,
+): Promise<ApiRecipeScrapeResponseSchema> => {
+  const savedRecipeRows = await database
     .insert(recipes)
-    .values({ title: data.title, url: data.url })
+    .values({
+      title: recipeTitle,
+      url: recipeUrl,
+      ingredientsRaw: scrapedRecipe.ingredientsRaw,
+    })
     .returning({
       id: recipes.id,
       title: recipes.title,
       url: recipes.url,
       ingredientsRaw: recipes.ingredientsRaw,
     });
-  return recipeBody;
+
+  const savedRecipe = savedRecipeRows[0];
+
+  if (!savedRecipe) {
+    throw new Error("Failed to save recipe");
+  }
+
+  const savedIngredients = await saveRecipeIngredients(
+    database,
+    savedRecipe.id,
+    scrapedRecipe.ingredients,
+  );
+
+  return buildScrapeResponse(savedRecipe, savedIngredients);
+};
+
+const updateScrapedRecipe = async (
+  database: DatabaseClient,
+  existingRecipe: SavedRecipeRow,
+  recipeTitle: string,
+  scrapedRecipe: ScrapedRecipe,
+): Promise<ApiRecipeScrapeResponseSchema> => {
+  const updatedRecipeRows = await database
+    .update(recipes)
+    .set({
+      title: recipeTitle,
+      ingredientsRaw: scrapedRecipe.ingredientsRaw,
+    })
+    .where(eq(recipes.id, existingRecipe.id))
+    .returning({
+      id: recipes.id,
+      title: recipes.title,
+      url: recipes.url,
+      ingredientsRaw: recipes.ingredientsRaw,
+    });
+
+  const updatedRecipe = updatedRecipeRows[0];
+
+  if (!updatedRecipe) {
+    throw new Error("Failed to update recipe");
+  }
+
+  await database.delete(ingredient).where(eq(ingredient.recipeId, existingRecipe.id));
+
+  const updatedIngredients = await saveRecipeIngredients(
+    database,
+    updatedRecipe.id,
+    scrapedRecipe.ingredients,
+  );
+
+  await syncShoppingListsForRecipe(updatedRecipe.id, database);
+
+  return buildScrapeResponse(updatedRecipe, updatedIngredients);
 };
 
 const syncShoppingListsForRecipe = async (
   recipeId: number,
-  database: typeof db,
+  database: DatabaseClient,
 ) => {
   const weekPlanRows = await database
     .select({
@@ -38,103 +205,74 @@ const syncShoppingListsForRecipe = async (
     .from(dayPlan)
     .where(eq(dayPlan.recipeId, recipeId));
 
-  const weekPlanIds = Array.from(
-    new Set(weekPlanRows.map((row) => row.weekPlanId)),
-  );
+  const uniqueWeekPlanIds: number[] = [];
 
-  for (const weekPlanId of weekPlanIds) {
+  for (const weekPlanRow of weekPlanRows) {
+    if (!uniqueWeekPlanIds.includes(weekPlanRow.weekPlanId)) {
+      uniqueWeekPlanIds.push(weekPlanRow.weekPlanId);
+    }
+  }
+
+  for (const weekPlanId of uniqueWeekPlanIds) {
     await syncShoppingListForWeekPlan(weekPlanId, database);
   }
 };
 
+export const getAllRecipes = async (): Promise<ApiRecipeSelectSchema[]> => {
+  const recipeRows = await db.select().from(recipes);
+  return recipeRows;
+};
+
+export const createRecipe = async (
+  recipeData: ApiRecipeCreateSchema,
+): Promise<ApiRecipeSavedSchema> => {
+  const savedRecipeRows = await db
+    .insert(recipes)
+    .values({
+      title: recipeData.title,
+      url: recipeData.url,
+    })
+    .returning({
+      id: recipes.id,
+      title: recipes.title,
+      url: recipes.url,
+      ingredientsRaw: recipes.ingredientsRaw,
+    });
+
+  const savedRecipe = savedRecipeRows[0];
+
+  if (!savedRecipe) {
+    throw new Error("Failed to create recipe");
+  }
+
+  return mapSavedRecipe(savedRecipe);
+};
+
 export const scrapeAndSaveRecipe = async (
-  data: ApiRecipeScrapeRequestSchema,
+  recipeData: ApiRecipeScrapeRequestSchema,
 ): Promise<ApiRecipeScrapeResponseSchema> => {
-  const normalizedUrl = data.url.trim();
-  const existingRecipe = await db
-    .select()
-    .from(recipes)
-    .where(eq(recipes.url, normalizedUrl));
+  const recipeUrl = recipeData.url.trim();
+  const existingRecipe = await getRecipeByUrl(db, recipeUrl);
+  const scrapedRecipe = await scrapeRecipeFromUrl(recipeUrl);
+  const recipeTitle = getRecipeTitle(recipeData, scrapedRecipe, existingRecipe);
 
-  const scrapedRecipe = await scrapeRecipeFromUrl(normalizedUrl);
-  const recipeTitle =
-    data.title?.trim() ||
-    scrapedRecipe.title ||
-    existingRecipe[0]?.title ||
-    "Unknown recipe";
+  return db.transaction(async (transaction) => {
+    const database = getTransactionDatabase(transaction);
 
-  return db.transaction(async (tx) => {
-    if (existingRecipe[0]) {
-      const [updatedRecipe] = await tx
-        .update(recipes)
-        .set({
-          title: recipeTitle,
-          ingredientsRaw: scrapedRecipe.ingredientsRaw,
-        })
-        .where(eq(recipes.id, existingRecipe[0].id))
-        .returning();
-
-      await tx.delete(ingredient).where(eq(ingredient.recipeId, existingRecipe[0].id));
-
-      const updatedIngredients = await tx
-        .insert(ingredient)
-        .values(
-          scrapedRecipe.ingredients.map((scrapedIngredient) => ({
-            recipeId: updatedRecipe.id,
-            name: scrapedIngredient.name,
-            quantity: scrapedIngredient.quantity,
-            unit: scrapedIngredient.unit,
-            rawText: scrapedIngredient.rawText,
-          })),
-        )
-        .returning();
-
-      await syncShoppingListsForRecipe(
-        updatedRecipe.id,
-        tx as unknown as typeof db,
+    if (existingRecipe) {
+      return updateScrapedRecipe(
+        database,
+        existingRecipe,
+        recipeTitle,
+        scrapedRecipe,
       );
-
-      return {
-        recipe: {
-          id: updatedRecipe.id,
-          title: updatedRecipe.title,
-          url: updatedRecipe.url,
-          ingredientsRaw: updatedRecipe.ingredientsRaw,
-        },
-        ingredients: updatedIngredients,
-      };
     }
 
-    const [savedRecipe] = await tx
-      .insert(recipes)
-      .values({
-        title: recipeTitle,
-        url: normalizedUrl,
-        ingredientsRaw: scrapedRecipe.ingredientsRaw,
-      })
-      .returning();
-
-    const savedIngredients = await tx
-      .insert(ingredient)
-      .values(
-        scrapedRecipe.ingredients.map((scrapedIngredient) => ({
-          recipeId: savedRecipe.id,
-          name: scrapedIngredient.name,
-          quantity: scrapedIngredient.quantity,
-          unit: scrapedIngredient.unit,
-          rawText: scrapedIngredient.rawText,
-        })),
-      )
-      .returning();
-
-    return {
-      recipe: {
-        id: savedRecipe.id,
-        title: savedRecipe.title,
-        url: savedRecipe.url,
-        ingredientsRaw: savedRecipe.ingredientsRaw,
-      },
-      ingredients: savedIngredients,
-    };
+    return saveNewScrapedRecipe(
+      database,
+      recipeUrl,
+      recipeTitle,
+      scrapedRecipe,
+    );
   });
 };

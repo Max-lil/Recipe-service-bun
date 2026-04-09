@@ -1,12 +1,15 @@
 import { Hono } from "hono";
-import * as service from "./ingredient-service";
+import * as ingredientService from "./ingredient-service";
 
-export const app = new Hono();
+const router = new Hono();
 
-app.get("/:recipeId", async (c) => {
-  const recipeId = c.req.param("recipeId");
-  const response = await service.getAllIngredientsByRecipeId(Number(recipeId));
-  return c.json(response);
+router.get("/:recipeId", async (c) => {
+  const recipeId = Number(c.req.param("recipeId"));
+  const ingredients = await ingredientService.getAllIngredientsByRecipeId(
+    recipeId,
+  );
+
+  return c.json(ingredients);
 });
 
-export default app;
+export default router;

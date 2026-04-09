@@ -1,11 +1,11 @@
 import { Hono } from "hono";
-import * as service from "./user-service";
+import * as userService from "./user-service";
 
-const app = new Hono();
+const router = new Hono();
 
-app.get("/", async (c) => {
-  const users = await service.getAllUsers();
+router.get("/", async (c) => {
+  const users = await userService.getAllUsers();
   return c.json(users, 200);
 });
 
-export default app;
+export default router;

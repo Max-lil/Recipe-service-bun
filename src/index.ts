@@ -1,21 +1,23 @@
-import { Hono } from "hono";
-import { testRoutes } from "./routes/test";
 import { cors } from "hono/cors";
-import recipeRouter from "./features/recipe/recipe-router";
-import userRouter from "./features/user/user-router";
-import planningRouter from "./features/planning/planning-router";
-import ingredientRouter from "./features/ingredient/ingredient-router";
-import shoppinglistRouter from "./features/shoppinglist/shoppinglist-router";
+import { Hono } from "hono";
+import ingredientRoutes from "./features/ingredient/ingredient-router";
+import planningRoutes from "./features/planning/planning-router";
+import recipeRoutes from "./features/recipe/recipe-router";
+import shoppingListRoutes from "./features/shoppinglist/shoppinglist-router";
+import userRoutes from "./features/user/user-router";
+import { testRoutes } from "./routes/test";
+
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://recipes-client-360907376023.europe-north2.run.app",
+];
 
 const app = new Hono();
 
 app.use(
   "*",
   cors({
-    origin: [
-      "http://localhost:5173",
-      "https://recipes-client-360907376023.europe-north2.run.app",
-    ],
+    origin: allowedOrigins,
   }),
 );
 
@@ -23,11 +25,11 @@ app.get("/", (c) => c.json({ message: "API is running" }));
 app.get("/health", (c) => c.text("ok"));
 
 app.route("/test", testRoutes);
-app.route("/recipes", recipeRouter);
-app.route("/users", userRouter);
-app.route("/planning", planningRouter);
-app.route("/ingredients", ingredientRouter);
-app.route("/shoppinglist", shoppinglistRouter);
+app.route("/recipes", recipeRoutes);
+app.route("/users", userRoutes);
+app.route("/planning", planningRoutes);
+app.route("/ingredients", ingredientRoutes);
+app.route("/shoppinglist", shoppingListRoutes);
 
 const port = Number(process.env.PORT ?? 8080);
 

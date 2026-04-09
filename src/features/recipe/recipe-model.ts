@@ -4,6 +4,7 @@ import { recipes } from "../../db/drizzle/schema";
 import { ingredientSelectSchema } from "../ingredient/ingredient-model";
 
 export const recipeSelectSchema = createSelectSchema(recipes);
+
 const requiredRecipeUrlSchema = z
   .string()
   .trim()
@@ -13,7 +14,7 @@ const requiredRecipeUrlSchema = z
     "URL must start with http:// or https://",
   );
 
-const normalizeRecipeUrlInput = (value: unknown) => {
+const normalizeOptionalRecipeUrl = (value: unknown) => {
   if (value === null || value === undefined) {
     return null;
   }
@@ -26,28 +27,34 @@ const normalizeRecipeUrlInput = (value: unknown) => {
   return trimmedValue === "" ? null : trimmedValue;
 };
 
+const optionalRecipeUrlSchema = z.preprocess(
+  normalizeOptionalRecipeUrl,
+  requiredRecipeUrlSchema.nullable().optional(),
+);
+
 export const recipeCreateSchema = createInsertSchema(recipes, {
   title: (schema) => schema.trim().min(1),
-  url: z.preprocess(
-    normalizeRecipeUrlInput,
-    requiredRecipeUrlSchema.nullable().optional(),
-  ),
+  url: optionalRecipeUrlSchema,
 });
+
 export const recipeBasicSchema = recipeSelectSchema.pick({
   id: true,
   title: true,
   url: true,
 });
+
 export const recipeScrapeRequestSchema = z.object({
   url: requiredRecipeUrlSchema,
   title: z.string().trim().min(1).nullable().optional(),
 });
+
 export const recipeSavedSchema = recipeSelectSchema.pick({
   id: true,
   title: true,
   url: true,
   ingredientsRaw: true,
 });
+
 export const recipeSavedIngredientSchema = ingredientSelectSchema.pick({
   id: true,
   recipeId: true,
@@ -56,6 +63,7 @@ export const recipeSavedIngredientSchema = ingredientSelectSchema.pick({
   unit: true,
   rawText: true,
 });
+
 export const recipeScrapeResponseSchema = z.object({
   recipe: recipeSavedSchema,
   ingredients: z.array(recipeSavedIngredientSchema),
