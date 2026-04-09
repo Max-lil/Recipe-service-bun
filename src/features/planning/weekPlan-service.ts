@@ -8,6 +8,7 @@ import type {
   ApiWeekPlanResponseSchema,
   ApiWeekPlanSaveSchema,
 } from "./weekPlan-model";
+import { buildWeekDates } from "./planning-date-utils";
 
 type DatabaseClient = typeof db;
 
@@ -133,6 +134,27 @@ const createWeekPlanRow = async (
   return weekPlanRows[0];
 };
 
+const ensureWeekPlanDayRows = async (
+  database: DatabaseClient,
+  weekPlanId: number,
+  weekStartDate: string,
+): Promise<StoredWeekPlanDayRow[]> => {
+  const missingDayValues = buildWeekDates(weekStartDate).map((plannedDate) => ({
+    weekPlanId,
+    plannedDate,
+    recipeId: null,
+  }));
+
+  await database
+    .insert(dayPlan)
+    .values(missingDayValues)
+    .onConflictDoNothing({
+      target: [dayPlan.weekPlanId, dayPlan.plannedDate],
+    });
+
+  return getWeekPlanDayRows(database, weekPlanId);
+};
+
 export const getSavedWeekPlan = async (
   data: ApiWeekPlanRequestSchema,
 ): Promise<ApiWeekPlanResponseSchema | null> => {
@@ -144,6 +166,27 @@ export const getSavedWeekPlan = async (
 
   const dayRows = await getWeekPlanDayRows(db, weekPlanRow.id);
   return mapWeekPlanResponse(weekPlanRow, dayRows);
+};
+
+export const getOrCreateWeekPlan = async (
+  data: ApiWeekPlanRequestSchema,
+): Promise<ApiWeekPlanResponseSchema> => {
+  return db.transaction(async (transaction) => {
+    const database = getTransactionDatabase(transaction);
+    let weekPlanRow = await getWeekPlanRow(database, data);
+
+    if (!weekPlanRow) {
+      weekPlanRow = await createWeekPlanRow(database, data);
+    }
+
+    const dayRows = await ensureWeekPlanDayRows(
+      database,
+      weekPlanRow.id,
+      weekPlanRow.weekStartDate,
+    );
+
+    return mapWeekPlanResponse(weekPlanRow, dayRows);
+  });
 };
 
 export const saveWeekPlan = async (
@@ -177,9 +220,14 @@ export const saveWeekPlan = async (
         },
       });
 
+    const dayRows = await ensureWeekPlanDayRows(
+      database,
+      weekPlanRow.id,
+      weekPlanRow.weekStartDate,
+    );
+
     await syncShoppingListForWeekPlan(weekPlanRow.id, database);
 
-    const dayRows = await getWeekPlanDayRows(database, weekPlanRow.id);
     return mapWeekPlanResponse(weekPlanRow, dayRows);
   });
 };

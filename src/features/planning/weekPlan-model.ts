@@ -1,8 +1,9 @@
-import { addDays, format, getDay, isValid, parseISO } from "date-fns";
+import { format, getDay, isValid, parseISO } from "date-fns";
 import { createSelectSchema } from "drizzle-zod";
 import { z } from "zod";
 import { weekPlan } from "../../db/drizzle/schema";
 import { recipeBasicSchema } from "../recipe/recipe-model";
+import { buildWeekDates } from "./planning-date-utils";
 
 export const weekPlanSelectSchema = createSelectSchema(weekPlan);
 
@@ -20,17 +21,6 @@ const mondayDateStringSchema = isoDateStringSchema.refine(
   (value) => getDay(parseISO(value)) === 1,
   "weekStartDate must be a Monday",
 );
-
-export const buildWeekDates = (weekStartDate: string): string[] => {
-  const startDate = parseISO(weekStartDate);
-  const weekDates: string[] = [];
-
-  for (let dayOffset = 0; dayOffset < 7; dayOffset += 1) {
-    weekDates.push(format(addDays(startDate, dayOffset), "yyyy-MM-dd"));
-  }
-
-  return weekDates;
-};
 
 export const weekPlanRequestSchema = z.object({
   userId: z.coerce.number().int().positive(),

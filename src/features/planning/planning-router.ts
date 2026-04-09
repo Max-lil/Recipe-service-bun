@@ -25,11 +25,7 @@ router.get("/week", zValidator("query", weekPlanRequestSchema), async (c) => {
 
 router.post("/week", zValidator("json", weekPlanRequestSchema), async (c) => {
   const body = c.req.valid("json");
-  const weekPlan = await weekPlanService.getSavedWeekPlan(body);
-
-  if (!weekPlan) {
-    return c.json({ message: "Week plan not found" }, 404);
-  }
+  const weekPlan = await weekPlanService.getOrCreateWeekPlan(body);
 
   return c.json(weekPlan, 200);
 });
