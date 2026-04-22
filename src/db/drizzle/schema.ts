@@ -17,6 +17,7 @@ export const shoppingListItem = pgTable("shopping_list_item", {
 	checked: boolean().notNull(),
 	name: varchar({ length: 255 }).notNull(),
 	quantity: real().notNull(),
+	manualQuantity: real("manual_quantity").notNull().default(0),
 	unit: varchar({ length: 255 }).notNull(),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	weekPlanId: bigint("week_plan_id", { mode: "number" }).notNull(),

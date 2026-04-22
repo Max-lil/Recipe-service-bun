@@ -6,6 +6,7 @@ type ShoppingListRow = {
   checked: boolean;
   name: string;
   quantity: number;
+  manualQuantity: number;
   unit: string;
   weekPlanId: number;
 };
@@ -93,6 +94,7 @@ describe("shopping list fetch", () => {
         checked: false,
         name: "Sugar",
         quantity: 3,
+        manualQuantity: 0,
         unit: "msk",
         weekPlanId: 5,
       },
@@ -101,6 +103,7 @@ describe("shopping list fetch", () => {
         checked: false,
         name: "Apple",
         quantity: 0,
+        manualQuantity: 0,
         unit: "pcs",
         weekPlanId: 5,
       },
@@ -109,6 +112,7 @@ describe("shopping list fetch", () => {
         checked: false,
         name: "Butter",
         quantity: 50,
+        manualQuantity: 2,
         unit: "g",
         weekPlanId: 5,
       },
@@ -117,6 +121,7 @@ describe("shopping list fetch", () => {
         checked: false,
         name: "Milk",
         quantity: 2,
+        manualQuantity: 0,
         unit: "dl",
         weekPlanId: 9,
       },
