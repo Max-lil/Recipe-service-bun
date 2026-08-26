@@ -5,6 +5,16 @@ import { db } from "../db/drizzle";
 import { users, session, account, verification } from "../db/drizzle/schema";
 import { allowedOrigins } from "./cors-origins";
 
+// The frontend and backend are separate Cloud Run services under the public
+// suffix run.app, so requests between them are cross-site. The session
+// cookie needs SameSite=None to be sent on those cross-site fetch calls;
+// only do this in production since local dev (same host, plain HTTP)
+// already works with the default Lax/non-secure cookie.
+const crossSiteCookieAttributes =
+  process.env.NODE_ENV === "production"
+    ? { sameSite: "none" as const, secure: true }
+    : undefined;
+
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
     provider: "pg",
@@ -30,6 +40,7 @@ export const auth = betterAuth({
       // trustedProxies is configured with GFE's IP ranges.
       ipAddressHeaders: ["x-client-ip"],
     },
+    defaultCookieAttributes: crossSiteCookieAttributes,
   },
   user: {
     modelName: "users",
