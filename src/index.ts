@@ -22,7 +22,21 @@ app.use(
 app.get("/", (c) => c.json({ message: "API is running" }));
 app.get("/health", (c) => c.text("ok"));
 
-app.on(["POST", "GET"], "/api/auth/*", (c) => auth.handler(c.req.raw));
+app.on(["POST", "GET"], "/api/auth/*", (c) => {
+  const forwardedFor = c.req.header("x-forwarded-for");
+  const ips = forwardedFor?.split(",").map((ip) => ip.trim()) ?? [];
+  // Cloud Run sits behind Google's front end (GFE), which always appends
+  // "<client-ip>,<gfe-ip>" to X-Forwarded-For — so the second-to-last entry
+  // is the verified client IP. Falls back to the only entry when there's
+  // just one (e.g. no GFE hop, like local dev behind a plain reverse proxy).
+  const clientIp = ips.length >= 2 ? ips[ips.length - 2] : ips[0];
+
+  const headers = new Headers(c.req.raw.headers);
+  if (clientIp) headers.set("x-client-ip", clientIp);
+  const request = new Request(c.req.raw, { headers });
+
+  return auth.handler(request);
+});
 
 app.route("/test", testRoutes);
 app.route("/recipes", recipeRoutes);

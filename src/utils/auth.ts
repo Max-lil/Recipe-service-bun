@@ -23,6 +23,13 @@ export const auth = betterAuth({
     database: {
       generateId: false,
     },
+    ipAddress: {
+      // We compute this ourselves in index.ts from X-Forwarded-For (Cloud
+      // Run/GFE always appends "<client-ip>,<gfe-ip>"), since better-auth's
+      // default X-Forwarded-For parsing rejects multi-hop headers unless
+      // trustedProxies is configured with GFE's IP ranges.
+      ipAddressHeaders: ["x-client-ip"],
+    },
   },
   user: {
     modelName: "users",
@@ -33,4 +40,10 @@ export const auth = betterAuth({
   baseURL: process.env.BETTER_AUTH_URL,
   trustedOrigins: allowedOrigins,
   plugins: [username()],
+  rateLimit: {
+    customRules: {
+      "/sign-in/*": { window: 60, max: 10 },
+      "/sign-up/*": { window: 60, max: 10 },
+    },
+  },
 });
