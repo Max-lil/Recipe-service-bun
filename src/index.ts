@@ -6,11 +6,8 @@ import recipeRoutes from "./features/recipe/recipe-router";
 import shoppingListRoutes from "./features/shoppinglist/shoppinglist-router";
 import userRoutes from "./features/user/user-router";
 import { testRoutes } from "./routes/test";
-
-const allowedOrigins = [
-  "http://localhost:5173",
-  "https://recipes-client-360907376023.europe-north2.run.app",
-];
+import { auth } from "./utils/auth";
+import { allowedOrigins } from "./utils/cors-origins";
 
 const app = new Hono();
 
@@ -18,11 +15,14 @@ app.use(
   "*",
   cors({
     origin: allowedOrigins,
+    credentials: true,
   }),
 );
 
 app.get("/", (c) => c.json({ message: "API is running" }));
 app.get("/health", (c) => c.text("ok"));
+
+app.on(["POST", "GET"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
 app.route("/test", testRoutes);
 app.route("/recipes", recipeRoutes);

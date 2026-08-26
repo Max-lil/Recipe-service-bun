@@ -29,6 +29,41 @@
       "when": 1776816000000,
       "tag": "0003_gentle_sky",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1787654122958,
+      "tag": "0004_living_wiccan",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787654208216,
+      "tag": "0005_outstanding_sunspot",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787685918268,
+      "tag": "0006_delete-legacy-recipes-and-ingredients",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787685928434,
+      "tag": "0007_cool_eternals",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787750403078,
+      "tag": "0008_bored_rhodey",
+      "breakpoints": true
     }
   ]
 }

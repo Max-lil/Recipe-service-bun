@@ -2,11 +2,23 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { shoppingListManualItemSchema } from "./shoppinglist-model";
 import * as shoppingListService from "./shoppinglist-service";
+import { requireAuth, type AuthVariables } from "../../utils/require-auth";
 
-const router = new Hono();
+const router = new Hono<{ Variables: AuthVariables }>();
+
+router.use("*", requireAuth);
 
 router.get("/:weekPlanId", async (c) => {
   const weekPlanId = Number(c.req.param("weekPlanId"));
+  const ownerId = await shoppingListService.getWeekPlanOwnerId(weekPlanId);
+
+  if (ownerId === null) {
+    return c.json({ message: "Week plan not found" }, 404);
+  }
+  if (ownerId !== c.get("userId")) {
+    return c.json({ message: "Forbidden" }, 403);
+  }
+
   const shoppingList = await shoppingListService.getShoppingListByWeekPlanId(
     weekPlanId,
   );
@@ -29,6 +41,15 @@ router.post(
   }),
   async (c) => {
     const weekPlanId = Number(c.req.param("weekPlanId"));
+    const ownerId = await shoppingListService.getWeekPlanOwnerId(weekPlanId);
+
+    if (ownerId === null) {
+      return c.json({ message: "Week plan not found" }, 404);
+    }
+    if (ownerId !== c.get("userId")) {
+      return c.json({ message: "Forbidden" }, 403);
+    }
+
     const shoppingListItem = await shoppingListService.addManualShoppingListItem(
       weekPlanId,
       c.req.valid("json"),

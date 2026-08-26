@@ -35,7 +35,7 @@ const optionalRecipeUrlSchema = z.preprocess(
 export const recipeCreateSchema = createInsertSchema(recipes, {
   title: (schema) => schema.trim().min(1),
   url: optionalRecipeUrlSchema,
-});
+}).omit({ userId: true });
 
 export const recipeBasicSchema = recipeSelectSchema.pick({
   id: true,

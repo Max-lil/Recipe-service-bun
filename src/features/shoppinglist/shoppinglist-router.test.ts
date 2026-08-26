@@ -19,7 +19,15 @@ describe("shopping list router", () => {
 
     mock.module("./shoppinglist-service", () => ({
       getShoppingListByWeekPlanId: mock(async () => []),
+      getWeekPlanOwnerId: mock(async () => 7),
       addManualShoppingListItem,
+    }));
+
+    mock.module("../../utils/require-auth", () => ({
+      requireAuth: async (c: any, next: any) => {
+        c.set("userId", 7);
+        await next();
+      },
     }));
 
     const { default: shoppingListRouter } = await import("./shoppinglist-router");

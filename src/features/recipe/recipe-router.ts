@@ -3,19 +3,17 @@ import { Hono } from "hono";
 import {
   recipeCreateSchema,
   recipeScrapeRequestSchema,
-  type ApiRecipeCreateSchema,
 } from "./recipe-model";
 import { RecipeScrapeError } from "./recipe-scraper";
 import * as recipeService from "./recipe-service";
+import { requireAuth, type AuthVariables } from "../../utils/require-auth";
 
-const router = new Hono();
+const router = new Hono<{ Variables: AuthVariables }>();
 
-const createRecipe = async (recipeData: ApiRecipeCreateSchema) => {
-  return recipeService.createRecipe(recipeData);
-};
+router.use("*", requireAuth);
 
 router.get("/", async (c) => {
-  const recipes = await recipeService.getAllRecipes();
+  const recipes = await recipeService.getAllRecipes(c.get("userId"));
   return c.json(recipes, 200);
 });
 
@@ -35,7 +33,10 @@ router.post(
   async (c) => {
     try {
       const recipeData = c.req.valid("json");
-      const recipe = await recipeService.scrapeAndSaveRecipe(recipeData);
+      const recipe = await recipeService.scrapeAndSaveRecipe(
+        recipeData,
+        c.get("userId"),
+      );
       return c.json(recipe, 200);
     } catch (error) {
       if (error instanceof RecipeScrapeError) {
@@ -62,7 +63,7 @@ router.post(
   }),
   async (c) => {
     const recipeData = c.req.valid("json");
-    const recipe = await createRecipe(recipeData);
+    const recipe = await recipeService.createRecipe(recipeData, c.get("userId"));
     return c.json(recipe, 201);
   },
 );
@@ -82,7 +83,7 @@ router.post(
   }),
   async (c) => {
     const recipeData = c.req.valid("json");
-    const recipe = await createRecipe(recipeData);
+    const recipe = await recipeService.createRecipe(recipeData, c.get("userId"));
     return c.json(recipe, 201);
   },
 );

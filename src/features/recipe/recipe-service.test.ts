@@ -9,8 +9,10 @@ import {
 } from "bun:test";
 import { recipeCreateSchema } from "./recipe-model";
 
-let expectedValues: { title: string; url: string | null } | null = null;
+let expectedValues: { title: string; url: string | null; userId: number } | null =
+  null;
 let createRecipe: typeof import("./recipe-service")["createRecipe"];
+let getRecipeOwnerId: typeof import("./recipe-service")["getRecipeOwnerId"];
 
 const getExpectedValues = () => {
   if (!expectedValues) {
@@ -44,6 +46,23 @@ const insert = mock((table: unknown) => {
   return { values };
 });
 
+let ownerRows: { userId: number }[] = [];
+
+const ownerWhere = mock((condition: unknown) => {
+  expect(condition).toBeDefined();
+  return Promise.resolve(ownerRows);
+});
+
+const ownerFrom = mock((table: unknown) => {
+  expect(table).toBeDefined();
+  return { where: ownerWhere };
+});
+
+const select = mock((selection: unknown) => {
+  expect(selection).toBeDefined();
+  return { from: ownerFrom };
+});
+
 describe("recipe service", () => {
   beforeAll(async () => {
     const shoppingListService = await import(
@@ -53,6 +72,7 @@ describe("recipe service", () => {
     mock.module("../../db/drizzle/index", () => ({
       db: {
         insert,
+        select,
       },
     }));
 
@@ -73,7 +93,7 @@ describe("recipe service", () => {
       syncShoppingListForWeekPlan: mock(async () => undefined),
     }));
 
-    ({ createRecipe } = await import("./recipe-service"));
+    ({ createRecipe, getRecipeOwnerId } = await import("./recipe-service"));
   });
 
   afterAll(() => {
@@ -82,9 +102,13 @@ describe("recipe service", () => {
 
   afterEach(() => {
     expectedValues = null;
+    ownerRows = [];
     insert.mockClear();
     values.mockClear();
     returning.mockClear();
+    select.mockClear();
+    ownerFrom.mockClear();
+    ownerWhere.mockClear();
   });
 
   test("persists null when url is omitted", async () => {
@@ -92,9 +116,9 @@ describe("recipe service", () => {
       title: "Tomato Soup",
     });
 
-    expectedValues = { title: "Tomato Soup", url: null };
+    expectedValues = { title: "Tomato Soup", url: null, userId: 4 };
 
-    await expect(createRecipe(payload)).resolves.toEqual({
+    await expect(createRecipe(payload, 4)).resolves.toEqual({
       id: 1,
       title: "Tomato Soup",
       url: null,
@@ -108,9 +132,9 @@ describe("recipe service", () => {
       url: null,
     });
 
-    expectedValues = { title: "Tomato Soup", url: null };
+    expectedValues = { title: "Tomato Soup", url: null, userId: 4 };
 
-    await expect(createRecipe(payload)).resolves.toEqual({
+    await expect(createRecipe(payload, 4)).resolves.toEqual({
       id: 1,
       title: "Tomato Soup",
       url: null,
@@ -124,13 +148,25 @@ describe("recipe service", () => {
       url: "   ",
     });
 
-    expectedValues = { title: "Tomato Soup", url: null };
+    expectedValues = { title: "Tomato Soup", url: null, userId: 4 };
 
-    await expect(createRecipe(payload)).resolves.toEqual({
+    await expect(createRecipe(payload, 4)).resolves.toEqual({
       id: 1,
       title: "Tomato Soup",
       url: null,
       ingredientsRaw: null,
     });
+  });
+
+  test("getRecipeOwnerId returns the owning user's id", async () => {
+    ownerRows = [{ userId: 4 }];
+
+    await expect(getRecipeOwnerId(7)).resolves.toBe(4);
+  });
+
+  test("getRecipeOwnerId returns null when the recipe doesn't exist", async () => {
+    ownerRows = [];
+
+    await expect(getRecipeOwnerId(7)).resolves.toBeNull();
   });
 });

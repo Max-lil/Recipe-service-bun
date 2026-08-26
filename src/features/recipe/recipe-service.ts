@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "../../db/drizzle/index";
 import { dayPlan, ingredient, recipes } from "../../db/drizzle/schema";
 import { syncShoppingListForWeekPlan } from "../shoppinglist/shoppinglist-service";
@@ -8,7 +8,6 @@ import type {
   ApiRecipeSavedSchema,
   ApiRecipeScrapeRequestSchema,
   ApiRecipeScrapeResponseSchema,
-  ApiRecipeSelectSchema,
 } from "./recipe-model";
 import {
   scrapeRecipeFromUrl,
@@ -60,6 +59,7 @@ const buildIngredientRows = (
 const getRecipeByUrl = async (
   database: DatabaseClient,
   recipeUrl: string,
+  userId: number,
 ): Promise<SavedRecipeRow | null> => {
   const recipeRows = await database
     .select({
@@ -69,7 +69,7 @@ const getRecipeByUrl = async (
       ingredientsRaw: recipes.ingredientsRaw,
     })
     .from(recipes)
-    .where(eq(recipes.url, recipeUrl));
+    .where(and(eq(recipes.url, recipeUrl), eq(recipes.userId, userId)));
 
   return recipeRows[0] ?? null;
 };
@@ -125,6 +125,7 @@ const saveNewScrapedRecipe = async (
   recipeUrl: string,
   recipeTitle: string,
   scrapedRecipe: ScrapedRecipe,
+  userId: number,
 ): Promise<ApiRecipeScrapeResponseSchema> => {
   const savedRecipeRows = await database
     .insert(recipes)
@@ -132,6 +133,7 @@ const saveNewScrapedRecipe = async (
       title: recipeTitle,
       url: recipeUrl,
       ingredientsRaw: scrapedRecipe.ingredientsRaw,
+      userId,
     })
     .returning({
       id: recipes.id,
@@ -218,19 +220,32 @@ const syncShoppingListsForRecipe = async (
   }
 };
 
-export const getAllRecipes = async (): Promise<ApiRecipeSelectSchema[]> => {
-  const recipeRows = await db.select().from(recipes);
+export const getAllRecipes = async (
+  userId: number,
+): Promise<ApiRecipeSavedSchema[]> => {
+  const recipeRows = await db
+    .select({
+      id: recipes.id,
+      title: recipes.title,
+      url: recipes.url,
+      ingredientsRaw: recipes.ingredientsRaw,
+    })
+    .from(recipes)
+    .where(eq(recipes.userId, userId));
+
   return recipeRows;
 };
 
 export const createRecipe = async (
   recipeData: ApiRecipeCreateSchema,
+  userId: number,
 ): Promise<ApiRecipeSavedSchema> => {
   const savedRecipeRows = await db
     .insert(recipes)
     .values({
       title: recipeData.title,
       url: recipeData.url,
+      userId,
     })
     .returning({
       id: recipes.id,
@@ -248,11 +263,26 @@ export const createRecipe = async (
   return mapSavedRecipe(savedRecipe);
 };
 
+// Returns the id of the user who owns the given recipe, or null if the
+// recipe doesn't exist. Used to authorize access to a recipe's ingredients
+// before reading them.
+export const getRecipeOwnerId = async (
+  recipeId: number,
+): Promise<number | null> => {
+  const rows = await db
+    .select({ userId: recipes.userId })
+    .from(recipes)
+    .where(eq(recipes.id, recipeId));
+
+  return rows[0]?.userId ?? null;
+};
+
 export const scrapeAndSaveRecipe = async (
   recipeData: ApiRecipeScrapeRequestSchema,
+  userId: number,
 ): Promise<ApiRecipeScrapeResponseSchema> => {
   const recipeUrl = recipeData.url.trim();
-  const existingRecipe = await getRecipeByUrl(db, recipeUrl);
+  const existingRecipe = await getRecipeByUrl(db, recipeUrl, userId);
   const scrapedRecipe = await scrapeRecipeFromUrl(recipeUrl);
   const recipeTitle = getRecipeTitle(recipeData, scrapedRecipe, existingRecipe);
 
@@ -273,6 +303,7 @@ export const scrapeAndSaveRecipe = async (
       recipeUrl,
       recipeTitle,
       scrapedRecipe,
+      userId,
     );
   });
 };

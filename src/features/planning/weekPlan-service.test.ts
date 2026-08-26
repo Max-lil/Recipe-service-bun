@@ -507,7 +507,8 @@ describe("planning router", () => {
     }));
 
     mock.module("./dayPlan-service", () => ({
-      getAllDayPlans: mock(async () => []),
+      getAllDayPlansForUser: mock(async () => []),
+      getDayPlanOwnerId: mock(async () => 4),
       assignRecipeToDayPlan: mock(async () => null),
       deleteRecipeByDayPlanId: mock(async () => null),
     }));
@@ -534,6 +535,13 @@ describe("planning router", () => {
         id: z.number().int().positive(),
         recipeId: z.number().int().positive().nullable(),
       }),
+    }));
+
+    mock.module("../../utils/require-auth", () => ({
+      requireAuth: async (c: any, next: any) => {
+        c.set("userId", 4);
+        await next();
+      },
     }));
 
     const { default: planningRouter } = await import("./planning-router");

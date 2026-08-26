@@ -98,4 +98,18 @@ describe("recipe create schema", () => {
       }),
     ).toThrow();
   });
+
+  test("strips a client-supplied userId", () => {
+    const parsed = recipeCreateSchema.parse({
+      title: "Tomato Soup",
+      url: null,
+      userId: 999,
+    });
+
+    expect(parsed).toEqual({
+      title: "Tomato Soup",
+      url: null,
+    });
+    expect("userId" in parsed).toBe(false);
+  });
 });

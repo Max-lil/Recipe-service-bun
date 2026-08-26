@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm/relations";
-import { weekPlan, shoppingListItem, users, recipes, dayPlan, ingredient } from "./schema";
+import { weekPlan, shoppingListItem, users, recipes, dayPlan, ingredient, session, account } from "./schema";
 
 export const shoppingListItemRelations = relations(shoppingListItem, ({one}) => ({
 	weekPlan: one(weekPlan, {
@@ -19,6 +19,23 @@ export const weekPlanRelations = relations(weekPlan, ({one, many}) => ({
 
 export const usersRelations = relations(users, ({many}) => ({
 	weekPlans: many(weekPlan),
+	sessions: many(session),
+	accounts: many(account),
+	recipes: many(recipes),
+}));
+
+export const sessionRelations = relations(session, ({one}) => ({
+	user: one(users, {
+		fields: [session.userId],
+		references: [users.id]
+	}),
+}));
+
+export const accountRelations = relations(account, ({one}) => ({
+	user: one(users, {
+		fields: [account.userId],
+		references: [users.id]
+	}),
 }));
 
 export const dayPlanRelations = relations(dayPlan, ({one}) => ({
@@ -32,9 +49,13 @@ export const dayPlanRelations = relations(dayPlan, ({one}) => ({
 	}),
 }));
 
-export const recipesRelations = relations(recipes, ({many}) => ({
+export const recipesRelations = relations(recipes, ({many, one}) => ({
 	dayPlans: many(dayPlan),
 	ingredients: many(ingredient),
+	user: one(users, {
+		fields: [recipes.userId],
+		references: [users.id]
+	}),
 }));
 
 export const ingredientRelations = relations(ingredient, ({one}) => ({

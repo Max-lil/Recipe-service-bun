@@ -4,8 +4,23 @@ import {
   dayPlan,
   ingredient,
   shoppingListItem,
+  weekPlan,
 } from "../../db/drizzle/schema";
 import type { ApiShoppingListManualItemSchema } from "./shoppinglist-model";
+
+// Returns the id of the user who owns the given week plan, or null if it
+// doesn't exist. Used to authorize access to a week's shopping list before
+// reading or writing it.
+export const getWeekPlanOwnerId = async (
+  weekPlanId: number,
+): Promise<number | null> => {
+  const rows = await db
+    .select({ userId: weekPlan.userId })
+    .from(weekPlan)
+    .where(eq(weekPlan.id, weekPlanId));
+
+  return rows[0]?.userId ?? null;
+};
 
 type WeekPlanIngredientRow = {
   name: string;
